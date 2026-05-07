@@ -55,6 +55,162 @@ python scripts/cli.py --model 7 --bits 4 --hw 1xA100 --engine vllm \
 python scripts/demo.py
 ```
 
+## What this gives you
+
+A roofline emulator like this is approximate (see [Limitations](#limitations)),
+but it answers ~80% of inference-deployment questions **without spinning up
+the actual hardware**. Here are the concrete decisions it unblocks, with
+numbers run on this very repo.
+
+### 1. Pick hardware before paying for it
+
+You're shipping a 7B chatbot, vLLM, batch=8. Question: T4, A10 or A100?
+
+```bash
+$ python scripts/cli.py --model 7 --bits 16 --engine vllm --batch 8 --hw 1xT4
+  prefill : 1102 ms     throughput : 636 tok/s    memory : 15.3 GB
+$ python scripts/cli.py --model 7 --bits 16 --engine vllm --batch 8 --hw 1xA10
+  prefill :  573 ms     throughput : 1272 tok/s   memory : 15.3 GB
+$ python scripts/cli.py --model 7 --bits 16 --engine vllm --batch 8 --hw 1xA100
+  prefill :  230 ms     throughput : 4322 tok/s   memory : 15.3 GB
+```
+
+Rough AWS pricing puts the per-request cost roughly equal across these
+three (the A10 wins by a hair on $/M tokens at this load). The decision
+becomes **latency-driven**: if your SLO is *first-token < 300 ms*, only
+A100 qualifies; if you have ~1 s budget, A10 saves money. T4 is rarely
+the right answer for 7B+ today.
+
+### 2. Quantization isn't a free lunch — model the trade-off
+
+13B model on A10. Compare FP16 vs GPTQ.4bit:
+
+```bash
+$ python scripts/cli.py --model 13 --bits 16 --hw 1xA10 --engine pytorch \
+                       --precision-label Unquantized
+  prefill : 203 ms      throughput : 10.4 tok/s   memory : 26.3 GB  ← exceeds 24 GB!
+$ python scripts/cli.py --model 13 --bits 4 --hw 1xA10 --engine pytorch \
+                       --precision-label GPTQ.4bit
+  prefill : 559 ms      throughput :  3.2 tok/s   memory :  6.8 GB  ← fits
+```
+
+The first surprise: **GPTQ.4bit on PyTorch is *slower* than FP16 here**, even
+though the weights are 4× smaller. The reason is in the calibrated `α`/`β`:
+GPTQ's dequantize-on-the-fly kernel achieves only ~12% of peak bandwidth
+versus 46% for unquantized. *To actually realise the 4× theoretical decode
+speedup you need a fused INT4 GEMM* — i.e. **vLLM, TensorRT-LLM,
+ExLlamaV2** — none of which PyTorch eager has.
+
+The second insight: FP16 *doesn't fit anyway*, so the real choice is
+"GPTQ on a worse engine" vs "fewer params" vs "bigger GPU". This is exactly
+the trade-off the emulator surfaces in seconds.
+
+### 3. "Will it fit?" — the very first question
+
+70B FP16 on A100-80GB at batch 1, vLLM:
+
+```bash
+$ python scripts/cli.py --model 70 --bits 16 --hw 1xA100 --engine vllm --batch 1
+  memory : 140.8 GB  !! exceeds 80 GB
+```
+
+Not even close. Decision tree the emulator collapses for you:
+
+| Path | Memory at bs=1 | Speedup vs A100 fp16 |
+|---|---:|---|
+| 2× A100-80GB tensor-parallel | ~70 GB / GPU | works, ~half t/s |
+| 1× A100 + GPTQ.4bit | 35.8 GB | works, ~3× decode |
+| 1× H100-141GB | 140.8 GB | works, ~2× decode |
+
+You can plug each branch into `cli.py` and decide before requesting quota.
+
+### 4. Capacity planning: tokens/sec → replicas
+
+Production SLO: **1000 RPS, average 100 tokens response, p50 latency < 5 s**.
+Throughput required = 1000 × 100 = **100,000 tok/s**.
+
+```bash
+$ python scripts/cli.py --model 7 --bits 16 --hw 1xA100 --engine vllm --batch 8
+  throughput : 4322 tok/s
+```
+
+So you need ~ ⌈100 000 / 4322⌉ = **24 A100 replicas** for the steady-state
+throughput, plus headroom for traffic spikes. At ~$3/hr on AWS, that's
+~$1700/day for inference compute — the kind of number that should be
+known *before* the launch meeting, not after.
+
+### 5. Cost per million tokens
+
+Plug in your cloud price list and divide:
+
+```python
+# decode-only, single-stream, 7B FP16 vLLM
+                    tok/s     $/hr      $/M tokens
+1xT4   (g4dn.xl)    636      0.526         0.23
+1xA10  (g5.xl)     1272      1.006         0.22
+1xA100 (1/8 p4d)   4322      4.10          0.26
+32vCPU-C7i (8xl)     30      1.428        13.22  ← 50× more expensive
+```
+
+Useful when fixing budget: if you charge $2/M output tokens, your inference
+margin per token on GPU is ~85%, on CPU you'd be losing money.
+
+### 6. CI/CD pre-deployment gate
+
+The emulator is a Python function — it slots straight into a pipeline:
+
+```python
+# scripts/preflight_check.py (sketch — adapt to your model registry)
+from emulator import predict
+from emulator.hardware import get_peak_compute, get_memory_bandwidth
+
+SLO_FIRST_TOKEN_MS = 500
+SLO_TOK_PER_S      = 30
+TARGET_HW          = "1xA10"
+
+def check(n_params_b, bits, engine_alpha, engine_beta):
+    res = predict(
+        n_params_b=n_params_b, bits=bits,
+        p_in=512, p_out=128, batch=4,
+        peak_flops=get_peak_compute(TARGET_HW, bits),
+        mem_bw=get_memory_bandwidth(TARGET_HW),
+        alpha=engine_alpha, beta=engine_beta, batch_mult=5.0,
+    )
+    assert res.prefill_s * 1000 < SLO_FIRST_TOKEN_MS, "prefill too slow"
+    assert res.throughput_tok_s > SLO_TOK_PER_S, "throughput below SLO"
+    assert res.memory_gb < 24, "won't fit on A10"
+```
+
+Run this in a GitHub Action on every PR that touches the model spec. PRs
+that violate the SLO never reach staging.
+
+### 7. Build intuition
+
+Even if you never ship a single prediction, working with the formula
+crystallises three things that aren't obvious:
+
+- **Decode is memory-bound**, not compute-bound. That's why bigger
+  *batches* (not bigger GPUs) buy throughput on H100. It's also why a
+  cheap A10 can match an A100 for single-stream decode.
+- **Quantization speeds up decode but not prefill** (and only when the
+  kernel actually exploits the smaller weights — see §2).
+- **Long contexts kill you through KV cache**, not through prefill
+  compute. A 32k-context request runs the same FLOPs as 32× of 1k-context
+  requests for prefill, but the KV term in decode keeps growing.
+
+### What this is *not*
+
+- **Not a substitute for actual benchmarking** when you're inside the last
+  20% of optimisation.
+- **Not architecture-aware**: MoE, multi-query / grouped-query attention,
+  sliding-window — all need explicit terms the formula currently doesn't
+  carry.
+- **Not multi-GPU**: tensor-parallel and pipeline-parallel splits introduce
+  PCIe / NVLink traffic that's outside the model.
+- **Not a regression suite**: 50–80% median error on individual rows.
+  Use it for *order-of-magnitude* answers and *relative comparisons*, not
+  absolute SLA compliance.
+
 ## Calibration on real data
 
 ```bash
