@@ -1,0 +1,120 @@
+"""Solve back the engine-specific MFU/MBU coefficients from observed data.
+
+Given a row from the leaderboard with known (model size, precision, hardware)
+and observed (prefill_s, decode_tps), invert the roofline equations:
+
+    alpha = 2 * N * P_in * batch / (peak_flops * t_prefill)
+    beta  = W_bytes / (mem_bw * (t_per_token - t_kv))
+
+The benchmark scenario is fixed across all rows: P_in=256, P_out=64, bs=1.
+"""
+import pandas as pd
+import numpy as np
+from .hardware import get_peak_compute, get_memory_bandwidth, HARDWARE_SPECS
+from .formula import _arch_for
+
+
+# benchmark scenario constants from the LLM-Perf Leaderboard
+P_IN = 256
+P_OUT = 64
+BATCH = 1
+
+
+PRECISION_BITS = {
+    "Unquantized": 16,
+    "BnB.4bit":    4,
+    "BnB.8bit":    8,
+    "GPTQ.4bit":   4,
+    "AWQ.4bit":    4,
+    "torchao.4bit": 4,
+}
+
+
+def calibrate_row(row, hw):
+    """Return (alpha_prefill, beta_decode, t_kv_estimated) for one row."""
+    n = float(row["Params (B)"])
+    quant = row["Quantization 🗜️"]
+    bits = PRECISION_BITS.get(quant, 16)
+
+    t_prefill = float(row["Prefill (s)"])
+    decode_tps = float(row["Decode (tokens/s)"])
+    if pd.isna(t_prefill) or pd.isna(decode_tps) or t_prefill <= 0 or decode_tps <= 0:
+        return None
+
+    t_per_token = 1.0 / decode_tps
+
+    C = get_peak_compute(hw, bits)
+    MBW = get_memory_bandwidth(hw)
+    N = n * 1e9
+    W = N * bits / 8
+
+    alpha = (2 * N * P_IN * BATCH) / (C * t_prefill)
+
+    # KV cache part (estimated from arch)
+    arch = _arch_for(n)
+    kv_per_token_bytes = 2 * arch["layers"] * arch["d_model"] * 2
+    avg_ctx = P_IN + P_OUT / 2
+    # for beta we factor out the KV term; assume KV reads use the same MBU
+    # so the equation t_token = (W / (MBW*beta)) + (kv*ctx / (MBW*beta))
+    # => beta = (W + kv*ctx) / (MBW * t_per_token)
+    beta = (W + kv_per_token_bytes * avg_ctx) / (MBW * t_per_token)
+
+    return {
+        "alpha_prefill": alpha,
+        "beta_decode":   beta,
+        "t_per_token_s": t_per_token,
+        "weights_gb":    W / 1e9,
+    }
+
+
+def calibrate(per_hw_df: dict) -> pd.DataFrame:
+    rows = []
+    for hw, df in per_hw_df.items():
+        for _, r in df.iterrows():
+            res = calibrate_row(r, hw)
+            if res is None:
+                continue
+            rows.append({
+                "hw": hw,
+                "model": r.get("Model 🤗"),
+                "params_b": r.get("Params (B)"),
+                "precision_label": r.get("Quantization 🗜️"),
+                "attention": r.get("Attention 👁️"),
+                "kernel": r.get("Kernel ⚛️"),
+                "backend": r.get("Backend 🏭"),
+                "prefill_s_obs": r.get("Prefill (s)"),
+                "decode_tps_obs": r.get("Decode (tokens/s)"),
+                **res,
+            })
+    return pd.DataFrame(rows)
+
+
+def filter_outliers(calib_df: pd.DataFrame,
+                    alpha_range=(0.005, 1.0),
+                    beta_range=(0.005, 1.0)) -> pd.DataFrame:
+    """Drop rows whose alpha/beta are physically implausible.
+
+    Values >1.0 mean our peak-FLOPS / MBW assumption is wrong for that case
+    (e.g. INT4 kernels on H100 use 1248 TFLOPS, not 312). Values <0.005 mean
+    the model didn't actually fit — observed time was dominated by paging.
+    """
+    return calib_df[
+        calib_df["alpha_prefill"].between(*alpha_range)
+        & calib_df["beta_decode"].between(*beta_range)
+    ].copy()
+
+
+def aggregate(calib_df: pd.DataFrame, by=None) -> pd.DataFrame:
+    """Aggregate calibrated coefficients by chosen group columns."""
+    if by is None:
+        by = ["hw", "backend", "precision_label"]
+    grouped = calib_df.groupby(by).agg(
+        n_rows=("alpha_prefill", "count"),
+        alpha_median=("alpha_prefill", "median"),
+        alpha_p25=("alpha_prefill", lambda s: s.quantile(0.25)),
+        alpha_p75=("alpha_prefill", lambda s: s.quantile(0.75)),
+        beta_median=("beta_decode", "median"),
+        beta_p25=("beta_decode", lambda s: s.quantile(0.25)),
+        beta_p75=("beta_decode", lambda s: s.quantile(0.75)),
+    ).reset_index()
+    return grouped.round(4)
