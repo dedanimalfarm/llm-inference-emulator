@@ -42,6 +42,10 @@ def main():
     p.add_argument("--batch", type=int, default=1)
     p.add_argument("--precision-label", default=None,
                    help="quantization label for calibration lookup, e.g. 'Unquantized', 'GPTQ.4bit'")
+    p.add_argument("--kv-bits-k", type=float, default=16,
+                   help="bits per element for K-cache (e.g. 8 for Q8_0, 4 for Q4_0)")
+    p.add_argument("--kv-bits-v", type=float, default=16,
+                   help="bits per element for V-cache")
     args = p.parse_args()
 
     eng = ENGINE_DEFAULTS[args.engine]
@@ -62,6 +66,7 @@ def main():
         mem_bw=get_memory_bandwidth(args.hw),
         alpha=alpha, beta=beta,
         batch_mult=eng["batch_mult"],
+        kv_bits_k=args.kv_bits_k, kv_bits_v=args.kv_bits_v,
     )
 
     print(f"\n{args.hw} | {args.engine} | {args.bits}-bit | {args.model}B params | bs={args.batch}")

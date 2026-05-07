@@ -211,6 +211,49 @@ crystallises three things that aren't obvious:
   Use it for *order-of-magnitude* answers and *relative comparisons*, not
   absolute SLA compliance.
 
+## Importing llama-bench results
+
+[llama-bench](https://github.com/ggml-org/llama.cpp/tree/master/tools/llama-bench)
+is the official benchmarking tool for `llama.cpp`. It outputs CSV with one
+row per *(model, config, test)* — where `test` is either prompt-processing
+(`pp{N}`), token-generation (`tg{N}`), or end-to-end (`pg{P,G}`).
+
+```bash
+# 1) on a real machine
+llama-bench -m model.gguf -p 512 -n 128 -ctk q8_0 -ctv q8_0 -o csv > runs.csv
+
+# 2) ingest into our schema (joins matching pp+tg rows by model+config)
+python scripts/import_llama_bench.py runs.csv \
+       --hw 1xT4 --backend llama.cpp --output data/llama_bench.csv
+
+# 3) re-run calibration so llama.cpp gets calibrated alongside PyTorch
+python scripts/run_calibration.py
+```
+
+The importer pulls **effective bits-per-weight from the actual on-disk size**
+(`8 · model_size / model_n_params`) instead of guessing from a label —
+Q4_K_M is 4.91 bpw, Q5_K_M is ~5.5 bpw, Q3_K_S is ~3.5 bpw, etc. This
+matters: a "4-bit" GGUF can vary by 25% depending on which K-quant was
+used, and the calibration only works if we feed the right `W` into the
+roofline.
+
+A small sample drawn from llama-bench's own README is included at
+`data/llama_bench_sample.csv` — it covers Qwen-2.5-7B-Q4_K_M and Llama-7B/13B
+on a CUDA RTX 4080, plus CPU runs at 8 / 32 threads. Run the importer
+against it to see the expected output shape.
+
+## Quantized KV cache
+
+`predict()` now accepts `kv_bits_k` and `kv_bits_v` (each defaulting to 16).
+Drop them to model `--cache-type-k q8_0 --cache-type-v q8_0` (halving KV
+bandwidth) or `q4_0` (quartering). For long-context decode the KV term
+dominates, so this can be a 2× speedup on its own:
+
+```bash
+python scripts/cli.py --model 7 --bits 16 --hw 1xA100 --engine vllm \
+                      --p-in 8192 --p-out 512 --kv-bits-k 8 --kv-bits-v 8
+```
+
 ## Calibration on real data
 
 ```bash

@@ -45,7 +45,7 @@ def _arch_for(n_params_b: float):
 
 def predict(
     n_params_b: float,
-    bits: int,
+    bits: float,
     p_in: int,
     p_out: int,
     batch: int,
@@ -56,6 +56,8 @@ def predict(
     batch_mult: float = 1.0,
     layers: Optional[int] = None,
     d_model: Optional[int] = None,
+    kv_bits_k: float = 16.0,
+    kv_bits_v: float = 16.0,
 ) -> InferenceResult:
     if layers is None or d_model is None:
         arch = _arch_for(n_params_b)
@@ -82,8 +84,9 @@ def predict(
         t_dec_base, b_dec = t_dec_compute, "compute"
 
     # ---- KV-cache cost averaged over the response ----
+    # K and V can be stored at different precisions (e.g. llama.cpp -ctk Q8_0 -ctv Q4_0)
     avg_ctx = p_in + p_out / 2.0
-    kv_per_token_bytes = 2 * layers * d_model * 2  # K + V, fp16
+    kv_per_token_bytes = layers * d_model * (kv_bits_k + kv_bits_v) / 8.0
     t_kv = kv_per_token_bytes * avg_ctx / (mem_bw * beta)
     t_dec = t_dec_base + t_kv
 

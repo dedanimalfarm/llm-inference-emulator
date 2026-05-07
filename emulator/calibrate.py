@@ -21,6 +21,9 @@ BATCH = 1
 
 
 PRECISION_BITS = {
+    # nominal weight precision; for GPTQ/AWQ the on-disk size is ~4.25 bpw
+    # because of scales/zeros, but the bandwidth-bound quantity is dominated
+    # by the 4-bit weights themselves
     "Unquantized": 16,
     "BnB.4bit":    4,
     "BnB.8bit":    8,
@@ -28,6 +31,20 @@ PRECISION_BITS = {
     "AWQ.4bit":    4,
     "torchao.4bit": 4,
 }
+
+
+def effective_bpw(model_size_bytes: float, n_params: float) -> float:
+    """Compute effective bits per weight from the actual on-disk size.
+
+    Useful for GGUF / mixed-quantization formats (Q4_K_M ≈ 4.91, Q5_K_M ≈ 5.5,
+    Q3_K_S ≈ 3.5, Q8_0 ≈ 8.5) where the nominal "4-bit" label hides scales,
+    zeros and per-channel overhead.
+
+    Example:
+        >>> effective_bpw(4_677_120_000, 7_615_616_512)  # Qwen2.5-7B-Q4_K_M
+        4.913...
+    """
+    return 8.0 * model_size_bytes / n_params
 
 
 def calibrate_row(row, hw):

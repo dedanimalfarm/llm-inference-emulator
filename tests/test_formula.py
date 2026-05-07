@@ -43,8 +43,32 @@ def test_large_batch_flips_decode_to_compute():
     assert small.bottleneck_decode == "memory"
 
 
+def test_quantized_kv_cache_speeds_up_long_context_decode():
+    common = dict(
+        n_params_b=7, bits=16, p_in=8192, p_out=512, batch=1,
+        peak_flops=get_peak_compute("1xA100", 16),
+        mem_bw=get_memory_bandwidth("1xA100"),
+        alpha=0.30, beta=0.70,
+    )
+    fp16_kv = predict(kv_bits_k=16, kv_bits_v=16, **common)
+    int8_kv = predict(kv_bits_k=8,  kv_bits_v=8,  **common)
+    int4_kv = predict(kv_bits_k=4,  kv_bits_v=4,  **common)
+    # at 8k context the KV term dominates decode; quantizing it must speed things up
+    assert int8_kv.decode_per_token_s < fp16_kv.decode_per_token_s
+    assert int4_kv.decode_per_token_s < int8_kv.decode_per_token_s
+
+
+def test_effective_bpw_q4_k_m():
+    from emulator.calibrate import effective_bpw
+    # Qwen2.5-7B-Q4_K_M numbers from llama-bench README
+    bpw = effective_bpw(4_677_120_000, 7_615_616_512)
+    assert 4.85 < bpw < 5.00, f"unexpected bpw {bpw}"
+
+
 if __name__ == "__main__":
     test_a100_7b_fp16_decode_is_memory_bound()
     test_quantization_reduces_memory_time()
     test_large_batch_flips_decode_to_compute()
+    test_quantized_kv_cache_speeds_up_long_context_decode()
+    test_effective_bpw_q4_k_m()
     print("all tests passed")
