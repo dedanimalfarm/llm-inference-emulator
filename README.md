@@ -66,6 +66,12 @@ python scripts/cli.py --model 7 --bits 4 --hw 1xA100 --engine vllm \
 python scripts/demo.py
 ```
 
+📖 **Подробный пример с пошаговым разбором каждого числа** —
+[`docs/WALKTHROUGH.md`](docs/WALKTHROUGH.md). Берёт реальный кейс
+(Qwen-2.5-32B Q4_K_M на 2× RTX 3090) и проводит через все слои:
+что подаёт пользователь → что подтягивается из таблиц → что считает
+формула → как сравнивается с замерами. С глоссарием всех терминов.
+
 ## What this gives you
 
 A roofline emulator like this is approximate (see [Limitations](#limitations)),
