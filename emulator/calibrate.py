@@ -61,7 +61,7 @@ def calibrate_row(row, hw):
 
     t_prefill = float(row["Prefill (s)"])
     decode_tps = float(row["Decode (tokens/s)"])
-    if pd.isna(t_prefill) or pd.isna(decode_tps) or t_prefill <= 0 or decode_tps <= 0:
+    if pd.isna(decode_tps) or decode_tps <= 0:
         return None
 
     t_per_token = 1.0 / decode_tps
@@ -82,18 +82,14 @@ def calibrate_row(row, hw):
 
     p_in = float(row["_n_prompt"]) if "_n_prompt" in row and not pd.isna(row["_n_prompt"]) else P_IN
 
-    # Detect prefill regime. If observed prefill time is within memory-bound
-    # floor (t = W/MBW at β=1.0), alpha is unidentifiable from this row —
-    # the formula returned t_pre_mem, not t_pre_compute. Solving the compute
-    # equation in that case yields garbage (often α >> 1 once filtered out by
-    # filter_outliers, but for borderline rows it gives plausible-looking
-    # but meaningless values). Mark such rows with NaN so downstream
-    # aggregation drops them.
-    t_pre_mem_floor = W / MBW
-    if t_prefill <= t_pre_mem_floor * 1.05:
-        alpha = float("nan")
-    else:
-        alpha = (2 * N * p_in * BATCH) / (C * t_prefill)
+    alpha = float("nan")
+    if not pd.isna(t_prefill) and t_prefill > 0:
+        # Detect prefill regime. 
+        t_pre_mem_floor = W / MBW
+        if t_prefill <= t_pre_mem_floor * 1.05:
+            alpha = float("nan")
+        else:
+            alpha = (2 * N * p_in * BATCH) / (C * t_prefill)
 
     # KV cache part (estimated from arch) (BUG-2)
     arch = _arch_for(n)
@@ -153,16 +149,11 @@ def calibrate(per_hw_df: dict) -> pd.DataFrame:
 def filter_outliers(calib_df: pd.DataFrame,
                     alpha_range=(0.005, 1.0),
                     beta_range=(0.005, 1.0)) -> pd.DataFrame:
-    """Drop rows whose alpha/beta are physically implausible.
-
-    Values >1.0 mean our peak-FLOPS / MBW assumption is wrong for that case
-    (e.g. INT4 kernels on H100 use 1248 TFLOPS, not 312). Values <0.005 mean
-    the model didn't actually fit — observed time was dominated by paging.
-    """
-    return calib_df[
-        calib_df["alpha_prefill"].between(*alpha_range)
-        & calib_df["beta_decode"].between(*beta_range)
-    ].copy()
+    """Drop rows whose alpha/beta are physically implausible."""
+    mask = calib_df["beta_decode"].between(*beta_range)
+    # alpha can be NaN if prefill wasn't identifiable
+    alpha_mask = calib_df["alpha_prefill"].isna() | calib_df["alpha_prefill"].between(*alpha_range)
+    return calib_df[mask & alpha_mask].copy()
 
 
 def aggregate(calib_df: pd.DataFrame, by=None) -> pd.DataFrame:
