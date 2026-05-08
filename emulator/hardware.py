@@ -60,9 +60,14 @@ HARDWARE_SPECS = {
         # Llama-70B Q4_K_M ≈ 40 GB). For smaller models, use "RTX-3090".
         # For real tensor-parallel speedup, hardware needs NVLink (A100 SXM,
         # H100) and a different engine (vLLM with NCCL).
-        "peak_tflops": {16: 284.0, 8: 568.0, 4: 568.0},
-        "memory_bandwidth_gbs": 1872.0,
-        "memory_capacity_gb": 48.0,
+        #
+        # peak_tflops and memory_bandwidth are PER-CARD. The actual scaling
+        # is applied by predict() as `peak × tp_size × tp_efficiency`.
+        # memory_capacity_gb is aggregate — that's the real combined VRAM
+        # available to host weights when split-mode is on.
+        "peak_tflops": {16: 142.0, 8: 284.0, 4: 284.0},  # per-card, same as RTX-3090
+        "memory_bandwidth_gbs": 936.0,                    # per-card
+        "memory_capacity_gb": 48.0,                       # aggregate (for capacity check)
         "tdp_w": 700,
         "tp_size": 2,
         "tp_efficiency": 0.50,    # split-mode=layer (pipeline parallel)

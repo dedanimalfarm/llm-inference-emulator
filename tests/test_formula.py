@@ -65,6 +65,28 @@ def test_effective_bpw_q4_k_m():
     assert 4.85 < bpw < 5.00, f"unexpected bpw {bpw}"
 
 
+def test_multi_gpu_capacity_only_when_tp_eff_inverse_of_size():
+    """When tp_size=N and tp_efficiency=1/N, multi-GPU latency == single-GPU.
+
+    This is the contract of HARDWARE_SPECS["2xRTX-3090"]: layer-split on PCIe 3.0
+    is pipeline parallel, so 2 cards yield 1× single-card throughput.
+
+    Catches the 'double-counting peak_flops' bug: peak_tflops in HARDWARE_SPECS
+    must be PER-CARD, then predict() applies tp_size × tp_efficiency.
+    """
+    common = dict(
+        n_params_b=7, bits=16, p_in=512, p_out=128, batch=1,
+        peak_flops=get_peak_compute("RTX-3090", 16),
+        mem_bw=get_memory_bandwidth("RTX-3090"),
+        alpha=0.36, beta=0.72,
+    )
+    single = predict(**common)
+    multi  = predict(tp_size=2, tp_efficiency=0.5, **common)
+    assert abs(single.prefill_s - multi.prefill_s) / single.prefill_s < 0.001, \
+        f"prefill differs: single={single.prefill_s} vs multi={multi.prefill_s}"
+    assert abs(single.decode_per_token_s - multi.decode_per_token_s) / single.decode_per_token_s < 0.001
+
+
 def test_rtx3090_calibration_sanity():
     import pandas as pd
     path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 
@@ -92,5 +114,6 @@ if __name__ == "__main__":
     test_large_batch_flips_decode_to_compute()
     test_quantized_kv_cache_speeds_up_long_context_decode()
     test_effective_bpw_q4_k_m()
+    test_multi_gpu_capacity_only_when_tp_eff_inverse_of_size()
     test_rtx3090_calibration_sanity()
     print("all tests passed")
