@@ -6,6 +6,13 @@ bandwidth visible to a single accelerator/instance.
 """
 
 HARDWARE_SPECS = {
+    "RTX-3090": {
+        "peak_tflops": {16: 142.0, 8: 284.0, 4: 284.0},
+        "memory_bandwidth_gbs": 936.0,
+        "memory_capacity_gb": 24.0,
+        "tdp_w": 350,
+    },
+
     "1xA100": {
         # NVIDIA A100 80GB PCIe — Ampere
         "peak_tflops": {16: 312.0, 8: 624.0, 4: 624.0},  # INT4 not natively accelerated

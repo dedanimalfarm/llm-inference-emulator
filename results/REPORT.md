@@ -120,3 +120,48 @@ $ python scripts/cli.py --model 7 --bits 4 --hw 1xT4 \
 Compare to the leaderboard for 7B GPTQ on T4 (median 27 tok/s decode,
 prefill ranges 0.20–0.30 s depending on attention) — the calibrated
 emulator lands inside the observed envelope.
+
+## RTX 3090 (Ampere GA102) calibration
+
+> Added 2026-05-08 based on local runs of | model                          |       size |     params | backend    | ngl |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | --------------: | -------------------: |.
+
+### Scenarios covered
+We ran 4 stages of benchmarks using :
+- **Depth study**: Prefill and decode on context lengths 0, 512, 2048.
+- **KV quantization**: Symmetric and mixed-precision (f16, q8_0, q4_0) with FlashAttention.
+- **Batch-size curve**: Prefill performance from batch 128 to 2048.
+- **Flash-attention**: Impact of  vs .
+
+### Results for llama.cpp (Q4_K_M)
+Calibration yielded the following coefficients for  on RTX 3090:
+- **alpha (prefill)**: 0.140 (MFU)
+- **beta (decode)**: 0.752 (MBU)
+
+These values replace the literature defaults (0.15/0.80) and provide a more accurate roofline for Ampere-based workstation cards.
+
+### Findings
+- **Mixed-precision KV regression**: We confirmed a significant performance drop when using asymmetric KV quantization (e.g., ). Prefill speed dropped from ~5700 t/s to ~110 t/s (a 50x regression). Symmetric quantization ( or ) maintains high performance.
+- **Flash-Attention impact**: FA provides a ~9% boost in prefill and ~3% in decode on the 512/128 context, with higher gains expected on longer contexts.
+
+## RTX 3090 (Ampere GA102) calibration
+
+> Added 2026-05-08 based on local runs of llama-bench.
+
+### Scenarios covered
+We ran 4 stages of benchmarks using Qwen2.5-7B-Instruct-Q4_K_M.gguf:
+- **Depth study**: Prefill and decode on context lengths 0, 512, 2048.
+- **KV quantization**: Symmetric and mixed-precision (f16, q8_0, q4_0) with FlashAttention.
+- **Batch-size curve**: Prefill performance from batch 128 to 2048.
+- **Flash-attention**: Impact of -fa 0 vs -fa 1.
+
+### Results for llama.cpp (Q4_K_M)
+Calibration yielded the following coefficients for llama.cpp on RTX 3090:
+- **alpha (prefill)**: 0.140 (MFU)
+- **beta (decode)**: 0.752 (MBU)
+
+These values replace the literature defaults (0.15/0.80) and provide a more accurate roofline for Ampere-based workstation cards.
+
+### Findings
+- **Mixed-precision KV regression**: We confirmed a significant performance drop when using asymmetric KV quantization (e.g., -ctk f16 -ctv q8_0). Prefill speed dropped from ~5700 t/s to ~110 t/s (a 50x regression). Symmetric quantization (q8_0/q8_0 or q4_0/q4_0) maintains high performance.
+- **Flash-Attention impact**: FA provides a ~9% boost in prefill and ~3% in decode on the 512/128 context, with higher gains expected on longer contexts.

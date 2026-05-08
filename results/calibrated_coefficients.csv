@@ -16,3 +16,4 @@ hw,backend,precision_label,n_rows,alpha_median,alpha_p25,alpha_p75,beta_median,b
 1xT4,pytorch,torchao.4bit,4,0.0216,0.0215,0.0217,0.0707,0.0689,0.0726
 32vCPU-C7i,onnxruntime,Unquantized,12,0.1671,0.1671,0.1672,0.2795,0.2792,0.2797
 32vCPU-C7i,pytorch,Unquantized,200,0.1861,0.1536,0.2273,0.3773,0.2856,0.4357
+RTX-3090,llama.cpp,Q4_K (4.91bpw),15,0.1401,0.1173,0.1497,0.7515,0.71,0.7652

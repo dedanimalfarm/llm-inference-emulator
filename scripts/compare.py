@@ -28,8 +28,9 @@ HW_FILES = {
     "1xA100":     "leaderboard-1xA100.csv",
     "1xT4":       "leaderboard-1xT4.csv",
     "32vCPU-C7i": "leaderboard-32vCPU-C7i.csv",
+    "RTX-3090":      "leaderboard-RTX-3090-llamacpp.csv",
 }
-HW_CAPACITY_MB = {"1xA10": 24576, "1xA100": 81920, "1xT4": 16384, "32vCPU-C7i": 65536}
+HW_CAPACITY_MB = {"1xA10": 24576, "1xA100": 81920, "1xT4": 16384, "32vCPU-C7i": 65536, "RTX-3090": 24576}
 
 
 def relative_error(pred, obs):

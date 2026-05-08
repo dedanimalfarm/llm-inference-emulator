@@ -51,7 +51,10 @@ def calibrate_row(row, hw):
     """Return (alpha_prefill, beta_decode, t_kv_estimated) for one row."""
     n = float(row["Params (B)"])
     quant = row["Quantization 🗜️"]
-    bits = PRECISION_BITS.get(quant, 16)
+    if "_effective_bpw" in row and not pd.isna(row["_effective_bpw"]):
+        bits = float(row["_effective_bpw"])
+    else:
+        bits = PRECISION_BITS.get(quant, 16)
 
     t_prefill = float(row["Prefill (s)"])
     decode_tps = float(row["Decode (tokens/s)"])
@@ -65,7 +68,8 @@ def calibrate_row(row, hw):
     N = n * 1e9
     W = N * bits / 8
 
-    alpha = (2 * N * P_IN * BATCH) / (C * t_prefill)
+    p_in = float(row["_n_prompt"]) if "_n_prompt" in row and not pd.isna(row["_n_prompt"]) else P_IN
+    alpha = (2 * N * p_in * BATCH) / (C * t_prefill)
 
     # KV cache part (estimated from arch)
     arch = _arch_for(n)
