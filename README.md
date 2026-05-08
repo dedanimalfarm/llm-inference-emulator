@@ -27,7 +27,7 @@ t_prefill = max(  2·N·P_in·bs / (C · α),     W / MBW              )
 t_decode  = max(  W / (MBW · β),              2·N·bs / (C · α)    ) + KV cache term
                   └ memory path ─┘             └ compute path ┘
 
-throughput = bs · γ_batch / t_decode
+throughput = bs / t_decode
 ```
 
 where:
@@ -37,10 +37,10 @@ where:
 - `MBW` — memory bandwidth in B/s (HW spec)
 - `α` — Model FLOPs Utilization in prefill (engine-specific, 0.15–0.65)
 - `β` — Memory Bandwidth Utilization in decode (engine-specific, 0.55–0.95)
-- `γ_batch` — effective batching multiplier (vLLM PagedAttention etc.)
+- `batch_saturation` — (batch_max, batch_50pct) for throughput scaling
 
 **Engines** don't change `C`/`MBW` (those are physics). They change `α`, `β`,
-`γ_batch` — see [`emulator/engines.py`](emulator/engines.py).
+`batch_saturation` — see [`emulator/engines.py`](emulator/engines.py).
 
 ### Supported Engines (Calibration Status)
 
@@ -191,7 +191,7 @@ def check(n_params_b, bits, engine_alpha, engine_beta):
         p_in=512, p_out=128, batch=4,
         peak_flops=get_peak_compute(TARGET_HW, bits),
         mem_bw=get_memory_bandwidth(TARGET_HW),
-        alpha=engine_alpha, beta=engine_beta, batch_mult=5.0,
+        alpha=engine_alpha, beta=engine_beta,
     )
     assert res.prefill_s * 1000 < SLO_FIRST_TOKEN_MS, "prefill too slow"
     assert res.throughput_tok_s > SLO_TOK_PER_S, "throughput below SLO"

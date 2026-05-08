@@ -48,7 +48,7 @@ def predict_row(row, hw, alpha, beta):
         p_in=P_IN, p_out=P_OUT, batch=BATCH,
         peak_flops=get_peak_compute(hw, bits),
         mem_bw=get_memory_bandwidth(hw),
-        alpha=alpha, beta=beta, batch_mult=1.0,
+        alpha=alpha, beta=beta,
     )
 
 

@@ -65,16 +65,17 @@ def main():
         peak_flops=get_peak_compute(args.hw, args.bits),
         mem_bw=get_memory_bandwidth(args.hw),
         alpha=alpha, beta=beta,
-        batch_mult=eng["batch_mult"],
+        batch_saturation=eng["batch_saturation"],
+        compute_path=eng.get("compute_path", 16),
         kv_bits_k=args.kv_bits_k, kv_bits_v=args.kv_bits_v,
     )
 
     print(f"\n{args.hw} | {args.engine} | {args.bits}-bit | {args.model}B params | bs={args.batch}")
-    print(f"  alpha={alpha:.3f}, beta={beta:.3f}, batch_mult={eng['batch_mult']}")
+    print(f"  alpha={alpha:.3f}, beta={beta:.3f}, batch_saturation={eng['batch_saturation']}")
     print(f"  prefill          : {res.prefill_s*1000:.1f} ms ({res.bottleneck_prefill}-bound)")
     print(f"  decode/token     : {res.decode_per_token_s*1000:.2f} ms ({res.bottleneck_decode}-bound)")
     print(f"  total latency    : {res.total_latency_s:.3f} s for {args.p_out} new tokens")
-    print(f"  throughput       : {res.throughput_tok_s:.1f} tok/s (effective batch ×{eng['batch_mult']})")
+    print(f"  throughput       : {res.throughput_tok_s:.1f} tok/s")
     print(f"  approx. memory   : {res.memory_gb:.2f} GB (weights + KV)")
     cap = HARDWARE_SPECS[args.hw]["memory_capacity_gb"]
     if res.memory_gb > cap:

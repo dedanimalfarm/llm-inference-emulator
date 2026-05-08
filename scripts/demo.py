@@ -35,13 +35,15 @@ def main():
                     peak_flops=get_peak_compute(hw, bits),
                     mem_bw=get_memory_bandwidth(hw),
                     alpha=eng["alpha"], beta=eng["beta"],
-                    batch_mult=eng["batch_mult"],
+                    batch_saturation=eng["batch_saturation"],
+                    compute_path=eng.get("compute_path", 16),
                 )
                 mem_cap = {"1xA10": 24, "1xA100": 80, "1xT4": 16, "32vCPU-C7i": 64}[hw]
                 fits = "yes" if res.memory_gb <= mem_cap else "NO"
                 print(f"{label:<11} {hw:<11} {eng_name:<11} "
                       f"{res.prefill_s*1000:>11.1f} {res.throughput_tok_s:>8.1f} "
                       f"{res.memory_gb:>7.2f} {fits:>6}")
+        print()
         print()
 
 
