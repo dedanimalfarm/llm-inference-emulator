@@ -39,7 +39,10 @@ def relative_error(pred, obs):
 
 def predict_row(row, hw, alpha, beta):
     n = float(row["Params (B)"])
-    bits = PRECISION_BITS.get(row["Quantization 🗜️"], 16)
+    if "_effective_bpw" in row and not pd.isna(row["_effective_bpw"]):
+        bits = float(row["_effective_bpw"])
+    else:
+        bits = PRECISION_BITS.get(row["Quantization 🗜️"], 16)
     return predict(
         n_params_b=n, bits=bits,
         p_in=P_IN, p_out=P_OUT, batch=BATCH,
