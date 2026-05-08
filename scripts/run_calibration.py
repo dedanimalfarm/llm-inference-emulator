@@ -23,9 +23,18 @@ HW_FILES = {
     "32vCPU-C7i": "leaderboard-32vCPU-C7i.csv",
     "RTX-3090":      "leaderboard-RTX-3090-llamacpp.csv",
     "2xRTX-3090":    "leaderboard-2xRTX-3090-llamacpp-32b.csv",
+    "2xRTX-5090":    "leaderboard-2xRTX-5090-vllm.csv",
 }
 
-HW_CAPACITY_MB = {"1xA10": 24576, "1xA100": 81920, "1xT4": 16384, "32vCPU-C7i": 65536, "RTX-3090": 24576, "2xRTX-3090": 49152}
+HW_CAPACITY_MB = {
+    "1xA10": 24576, 
+    "1xA100": 81920, 
+    "1xT4": 16384, 
+    "32vCPU-C7i": 65536, 
+    "RTX-3090": 24576, 
+    "2xRTX-3090": 49152,
+    "2xRTX-5090": 65536,
+}
 
 
 def main():
