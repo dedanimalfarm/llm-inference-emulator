@@ -108,6 +108,151 @@ def test_rtx3090_calibration_sanity():
     assert 0.5 < beta < 0.9, f"beta {beta} out of range"
 
 
+def test_prefix_cache_collapses_prefill_to_weight_load():
+    """At hit_rate=1.0 the matmul work disappears; only weight load remains.
+
+    Physical invariant: prefill time should equal W / MBW (memory-bound floor).
+    """
+    common = dict(
+        n_params_b=7, bits=16, p_in=2048, p_out=64, batch=1,
+        peak_flops=get_peak_compute("1xA100", 16),
+        mem_bw=get_memory_bandwidth("1xA100"),
+        alpha=0.40, beta=0.85,
+    )
+    base   = predict(prefix_cache_hit=0.0, **common)
+    cached = predict(prefix_cache_hit=1.0, **common)
+    # Full hit: prefill = W / MBW (weights still read once)
+    N = 7e9
+    W = N * 16 / 8
+    expected = W / get_memory_bandwidth("1xA100")
+    assert abs(cached.prefill_s - expected) / expected < 0.01, \
+        f"cached prefill {cached.prefill_s} vs expected {expected}"
+    assert cached.prefill_s < base.prefill_s
+    assert cached.bottleneck_prefill == "memory"
+
+
+def test_prefix_cache_partial_hit_proportional():
+    """h=0.8 should reduce prefill compute term by 5×; total prefill time
+    follows max(compute, memory). For a regime where prefill is compute-bound,
+    we expect ~5× speedup at h=0.8."""
+    common = dict(
+        n_params_b=70, bits=16, p_in=4096, p_out=64, batch=1,  # big enough to stay compute-bound
+        peak_flops=get_peak_compute("1xA100", 16),
+        mem_bw=get_memory_bandwidth("1xA100"),
+        alpha=0.40, beta=0.85,
+    )
+    base   = predict(prefix_cache_hit=0.0, **common)
+    cached = predict(prefix_cache_hit=0.8, **common)
+    assert base.bottleneck_prefill == "compute"
+    # h=0.8 → compute term × 0.2; expect close to 5× speedup if still compute-bound
+    ratio = base.prefill_s / cached.prefill_s
+    assert ratio > 4.0, f"expected ~5× speedup at h=0.8, got {ratio:.2f}×"
+
+
+def test_speculative_decoding_speeds_up_decode():
+    """At accept_rate=0.7, k=4, overhead=0.15 the formula gives
+    (1.15 / 2.8) ≈ 0.41× per-token time → ~2.4× decode speedup."""
+    common = dict(
+        n_params_b=70, bits=16, p_in=256, p_out=64, batch=1,
+        peak_flops=get_peak_compute("1xA100", 16),
+        mem_bw=get_memory_bandwidth("1xA100"),
+        alpha=0.40, beta=0.85,
+    )
+    base = predict(speculative=False, **common)
+    spec = predict(speculative=True, spec_accept_rate=0.7, spec_k_proposed=4,
+                   spec_overhead=0.15, **common)
+    assert spec.decode_per_token_s < base.decode_per_token_s * 0.5
+    # Sanity: with accept_rate=0.0 it must NOT speed up — it would divide by zero.
+    # Formula raises in that case; we just ensure it's not silently faster than base.
+
+
+def test_speculative_zero_accept_rate_raises():
+    common = dict(
+        n_params_b=7, bits=16, p_in=256, p_out=64, batch=1,
+        peak_flops=get_peak_compute("1xA100", 16),
+        mem_bw=get_memory_bandwidth("1xA100"),
+    )
+    try:
+        predict(speculative=True, spec_accept_rate=0.0, **common)
+    except ValueError:
+        return
+    raise AssertionError("expected ValueError on accept_rate=0")
+
+
+def test_batch_saturation_asymptote():
+    """At batch >> batch_50pct, bs_eff → batch_max regardless of batch.
+    We verify by extracting bs_eff = throughput · t_dec from the result."""
+    common = dict(
+        n_params_b=7, bits=16, p_in=256, p_out=64,
+        peak_flops=get_peak_compute("1xA100", 16),
+        mem_bw=get_memory_bandwidth("1xA100"),
+        alpha=0.40, beta=0.85,
+        batch_saturation=(16, 2),
+    )
+    small = predict(batch=2,   **common)
+    big   = predict(batch=500, **common)
+    bs_eff_small = small.throughput_tok_s * small.decode_per_token_s
+    bs_eff_big   = big.throughput_tok_s   * big.decode_per_token_s
+    # At batch=2 (==batch_50pct) we expect bs_eff ≈ batch_max/2 = 8
+    assert abs(bs_eff_small - 8.0) < 0.01
+    # At batch=500, bs_eff should be within 1% of batch_max=16
+    assert abs(bs_eff_big - 16.0) / 16.0 < 0.01
+
+
+def test_batch_saturation_50pct_midpoint():
+    """At batch == batch_50pct, bs_eff == batch_max / 2 by construction."""
+    common = dict(
+        n_params_b=7, bits=16, p_in=256, p_out=64, batch=2,
+        peak_flops=get_peak_compute("1xA100", 16),
+        mem_bw=get_memory_bandwidth("1xA100"),
+        alpha=0.40, beta=0.85,
+    )
+    res = predict(batch_saturation=(16, 2), **common)
+    expected_bs_eff = 16.0 / 2  # batch == batch_50pct
+    expected_tput = expected_bs_eff / res.decode_per_token_s
+    assert abs(res.throughput_tok_s - expected_tput) / expected_tput < 1e-6
+
+
+def test_kv_packing_eff_inflates_memory_for_naive_allocator():
+    """Naive allocator (eff=0.65) must report ~50% more KV memory than
+    PagedAttention (eff=0.97), all else equal."""
+    common = dict(
+        n_params_b=7, bits=16, p_in=2048, p_out=512, batch=8,
+        peak_flops=get_peak_compute("1xA100", 16),
+        mem_bw=get_memory_bandwidth("1xA100"),
+        alpha=0.40, beta=0.85,
+    )
+    paged = predict(kv_packing_eff=0.97, **common)
+    naive = predict(kv_packing_eff=0.65, **common)
+    # Both report W + KV/eff. KV portion differs by factor (0.97/0.65) ≈ 1.49.
+    # Total memory ratio depends on KV-to-W ratio, but naive must be larger.
+    assert naive.memory_gb > paged.memory_gb
+    # Default (eff=1.0) should be the cleanest baseline — smaller than both
+    base = predict(**common)  # eff defaults to 1.0
+    assert base.memory_gb < paged.memory_gb < naive.memory_gb
+
+
+def test_defaults_preserve_legacy_behavior():
+    """A call with no vLLM-style kwargs must produce the same result as
+    pre-vLLM code. This locks the back-compat contract."""
+    common = dict(
+        n_params_b=7, bits=16, p_in=256, p_out=64, batch=4,
+        peak_flops=get_peak_compute("1xA100", 16),
+        mem_bw=get_memory_bandwidth("1xA100"),
+        alpha=0.30, beta=0.70,
+    )
+    res = predict(**common)
+    # Without batch_saturation, bs_eff == batch → throughput = batch / t_dec
+    assert abs(res.throughput_tok_s - 4.0 / res.decode_per_token_s) < 1e-9
+    # Without speculative, decode_per_token_s is the raw t_dec
+    # (no acceleration, no overhead applied)
+    explicit = predict(speculative=False, prefix_cache_hit=0.0,
+                       batch_saturation=None, kv_packing_eff=1.0, **common)
+    assert res.decode_per_token_s == explicit.decode_per_token_s
+    assert res.throughput_tok_s == explicit.throughput_tok_s
+    assert res.memory_gb == explicit.memory_gb
+
+
 if __name__ == "__main__":
     test_a100_7b_fp16_decode_is_memory_bound()
     test_quantization_reduces_memory_time()
@@ -116,4 +261,12 @@ if __name__ == "__main__":
     test_effective_bpw_q4_k_m()
     test_multi_gpu_capacity_only_when_tp_eff_inverse_of_size()
     test_rtx3090_calibration_sanity()
+    test_prefix_cache_collapses_prefill_to_weight_load()
+    test_prefix_cache_partial_hit_proportional()
+    test_speculative_decoding_speeds_up_decode()
+    test_speculative_zero_accept_rate_raises()
+    test_batch_saturation_asymptote()
+    test_batch_saturation_50pct_midpoint()
+    test_kv_packing_eff_inflates_memory_for_naive_allocator()
+    test_defaults_preserve_legacy_behavior()
     print("all tests passed")

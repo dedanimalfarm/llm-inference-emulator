@@ -58,7 +58,6 @@ def predict(
     mem_bw: float,
     alpha: float = 0.25,
     beta: float = 0.60,
-    batch_mult: float = 1.0,
     layers: Optional[int] = None,
     d_model: Optional[int] = None,
     kv_heads: Optional[int] = None,
@@ -92,6 +91,11 @@ def predict(
         d_model = arch["d_model"] if d_model is None else d_model
         kv_heads = arch.get("kv_heads") if kv_heads is None else kv_heads
 
+    if not 0.0 <= prefix_cache_hit <= 1.0:
+        raise ValueError(f"prefix_cache_hit must be in [0, 1], got {prefix_cache_hit}")
+    if not 0.0 < kv_packing_eff <= 1.0:
+        raise ValueError(f"kv_packing_eff must be in (0, 1], got {kv_packing_eff}")
+
     N = n_params_b * 1e9
     W = N * bits / 8.0  # weights in bytes
 
@@ -100,7 +104,10 @@ def predict(
     eff_mbw = mem_bw * tp_size * tp_efficiency
 
     # ---- prefill ----
-    t_pre_compute = 2.0 * N * p_in * batch / (eff_flops * alpha)
+    # Prefix caching: cached tokens skip the matmul entirely. Memory term
+    # (weight load) is unaffected — weights still have to be read once.
+    p_in_eff = p_in * (1.0 - prefix_cache_hit)
+    t_pre_compute = 2.0 * N * p_in_eff * batch / (eff_flops * alpha)
     t_pre_mem     = W / eff_mbw
     if t_pre_compute >= t_pre_mem:
         t_pre, b_pre = t_pre_compute, "compute"
@@ -118,7 +125,7 @@ def predict(
     # ---- KV-cache cost averaged over the response ----
     # K and V can be stored at different precisions (e.g. llama.cpp -ctk Q8_0 -ctv Q4_0)
     avg_ctx = p_in + p_out / 2.0
-    
+
     # head_dim is usually 128 or d_model/heads.
     # For simplicity in this roofline, we use d_model and kv_heads/total_heads ratio.
     # But llama.cpp/GGUF uses: layers * kv_heads * head_dim * 2 (for K and V) * bytes_per_element
@@ -128,18 +135,43 @@ def predict(
     else:
         # Fallback to full attention if kv_heads not specified
         kv_per_token_bytes = layers * d_model * (kv_bits_k + kv_bits_v) / 8.0
-        
+
     t_kv = kv_per_token_bytes * avg_ctx / (eff_mbw * beta)
     t_dec = t_dec_base + t_kv
 
-    bs_eff = batch * batch_mult
-    total_latency = t_pre + p_out * t_dec
-    kv_total = kv_per_token_bytes * (p_in + p_out) * batch
+    # ---- Speculative decoding ----
+    # Each main-model step costs (1 + overhead) extra (the draft pass), but
+    # in expectation produces (accept_rate * k) accepted tokens per step.
+    if speculative:
+        accepted_per_step = spec_accept_rate * spec_k_proposed
+        if accepted_per_step <= 0:
+            raise ValueError("speculative: spec_accept_rate * spec_k_proposed must be > 0")
+        t_dec_final = t_dec * (1.0 + spec_overhead) / accepted_per_step
+    else:
+        t_dec_final = t_dec
+
+    # ---- Effective concurrent batch (continuous-batching saturation) ----
+    # Scheduler can keep `batch_max` slots filled; saturation curve is a
+    # Hill-style approximation: at batch == batch_50pct the effective
+    # concurrency is half of batch_max; at batch >> batch_50pct it asymptotes.
+    if batch_saturation is not None:
+        batch_max, batch_50pct = batch_saturation
+        bs_eff = batch_max * batch / (batch + batch_50pct)
+    else:
+        bs_eff = float(batch)
+
+    # ---- Memory budget ----
+    # Naive allocators reserve a worst-case KV buffer per request; PagedAttention
+    # packs blocks tightly. kv_packing_eff = (used / allocated), so allocated =
+    # actual_kv / kv_packing_eff. Default 1.0 keeps existing callers stable.
+    kv_total = kv_per_token_bytes * (p_in + p_out) * batch / kv_packing_eff
+
+    total_latency = t_pre + p_out * t_dec_final
     return InferenceResult(
         prefill_s=t_pre,
-        decode_per_token_s=t_dec,
+        decode_per_token_s=t_dec_final,
         total_latency_s=total_latency,
-        throughput_tok_s=bs_eff / t_dec,
+        throughput_tok_s=bs_eff / t_dec_final,
         memory_gb=(W + kv_total) / 1e9,
         bottleneck_prefill=b_pre,
         bottleneck_decode=b_dec,
