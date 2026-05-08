@@ -66,7 +66,26 @@ def predict(
     kv_bits_v: float = 16.0,
     tp_size: int = 1,
     tp_efficiency: float = 1.0,
+    prefix_cache_hit: float = 0.0,
+    batch_saturation: Optional[tuple] = None,  # (batch_max, batch_50pct)
+    kv_packing_eff: float = 1.0,
+    speculative: bool = False,
+    spec_accept_rate: float = 0.7,
+    spec_k_proposed: int = 4,
+    spec_overhead: float = 0.15,
+    compute_path: int = 16,
 ) -> InferenceResult:
+    """Predict inference performance.
+    
+    prefix_cache_hit: ratio of prompt tokens served from cache
+    batch_saturation: (batch_max, batch_50pct) for MFU scaling
+    kv_packing_eff: efficiency of PagedAttention allocation
+    speculative: enable speculative decoding mode
+    spec_accept_rate: ratio of accepted draft tokens
+    spec_k_proposed: tokens proposed by draft model
+    spec_overhead: relative cost of draft model pass
+    compute_path: bits for peak_flops lookup
+    """
     if layers is None or d_model is None:
         arch = _arch_for(n_params_b)
         layers = arch["layers"] if layers is None else layers
