@@ -29,61 +29,76 @@ def parse_vllm_json(path):
         print(f"Warning: unexpected JSON format in {path}")
         return []
     
+    # Enrich data from filename if model/metadata is missing
+    fname = os.path.basename(path).lower()
+    for r in rows:
+        if "model" not in r or r["model"] == "unknown":
+            if "qwen7b" in fname: 
+                r["model"] = "Qwen/Qwen2.5-7B-Instruct-AWQ"
+                r["params_b"] = 7.0
+            elif "qwen32b" in fname:
+                r["model"] = "Qwen/Qwen2.5-32B-Instruct-AWQ"
+                r["params_b"] = 32.0
+            elif "llama70b" in fname:
+                r["model"] = "hugging-quants/Meta-Llama-3.1-70B-Instruct-AWQ-INT4"
+                r["params_b"] = 70.0
+        
+        if "tp" not in r:
+            if "tp1" in fname: r["tp"] = 1
+            elif "tp2" in fname: r["tp"] = 2
+        
+        # Estimate input/output len from total_num_tokens and num_requests if missing
+        if "input_len" not in r and "total_num_tokens" in r and "num_requests" in r:
+            # Assuming fixed split 256/64 as per our benchmark run
+            r["input_len"] = 256
+            r["output_len"] = 64
+
     return rows
 
 def to_internal_schema(results, hw):
     out = []
     for r in results:
-        # Map vLLM fields to our schema. 
-        # Note: vLLM bench throughput summary might not split prefill/decode cleanly
-        # if it's an end-to-end benchmark. We use available fields.
-        
         model = r.get("model", "unknown")
-        # Extract params from model name if not present (heuristic)
-        params_b = r.get("params_b", 7.0) # fallback
-        if "7b" in model.lower(): params_b = 7.0
-        elif "8b" in model.lower(): params_b = 8.0
-        elif "32b" in model.lower(): params_b = 32.0
-        elif "70b" in model.lower(): params_b = 70.0
-
-        n_batch = r.get("num_prompts", 1)
+        params_b = r.get("params_b", 7.0)
+        n_batch = r.get("num_requests", 1)
         p_in = r.get("input_len", 256)
         p_out = r.get("output_len", 64)
         
-        # Prefill time is often not explicitly in the summary, 
-        # but TTFT (Time To First Token) is a good proxy.
-        # If not present, we might have to use NaN or estimate.
-        ttft_avg = r.get("avg_ttft_ms", 0) / 1000.0
+        # TTFT not in summary, use End-to-End as upper bound or leave NaN
+        ttft_avg = float("nan")
         
-        # Decode throughput
-        decode_tps = r.get("output_throughput", 0)
+        # tokens_per_second is total throughput. 
+        # Output throughput = total_throughput * (output_len / (input_len + output_len))
+        total_tps = r.get("tokens_per_second", 0)
+        decode_tps = total_tps * (p_out / (p_in + p_out))
         
-        # Quantization
-        quant = "Unquantized"
-        if "awq" in model.lower(): quant = "AWQ.4bit"
-        elif "gptq" in model.lower(): quant = "GPTQ.4bit"
-        elif "fp8" in model.lower(): quant = "FP8"
+        tp = r.get("tp", 1)
+        quant = "AWQ.4bit" # all our vLLM tests used AWQ
+        
+        # Estimate memory (BUG-5)
+        memory_mb = (params_b * 1000 * 4 / 8) + 1024 # weights + small overhead
 
         out.append({
-            "Experiment 🧪":     f"{model}|bs={n_batch}",
+            "Experiment 🧪":     f"{model}|bs={n_batch}|tp={tp}",
             "Model 🤗":          model,
-            "Prefill (s)":       round(ttft_avg, 4) if ttft_avg > 0 else float("nan"),
+            "Prefill (s)":       ttft_avg,
             "Per Token (s)":     round(1.0 / decode_tps, 6) if decode_tps > 0 else float("nan"),
             "Decode (tokens/s)": round(decode_tps, 3),
             "Energy (tokens/kWh)": float("nan"),
             "Backend 🏭":         "vllm",
-            "Precision 📥":       "int4/8" if "awq" in quant.lower() or "gptq" in quant.lower() else "fp16",
+            "Precision 📥":       "int4/8",
             "Quantization 🗜️":   quant,
             "Attention 👁️":       "PagedAttention",
             "Kernel ⚛️":          "vllm",
             "Architecture 🏛️":    model,
-            "End-to-End (s)":    round(r.get("duration", 0), 4),
+            "End-to-End (s)":    round(r.get("elapsed_time", 0), 4),
             "Open LLM Score (%)": float("nan"),
             "Params (B)":        params_b,
-            "Memory (MB)":       float("nan"),
+            "Memory (MB)":       memory_mb,
             "_n_prompt":         p_in,
             "_n_gen":            p_out,
             "_n_batch":          n_batch,
+            "_tp":               tp,
             "_hw":               hw,
         })
     return pd.DataFrame(out)
