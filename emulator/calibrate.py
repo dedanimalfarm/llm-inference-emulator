@@ -81,7 +81,19 @@ def calibrate_row(row, hw):
     W = N * bits / 8
 
     p_in = float(row["_n_prompt"]) if "_n_prompt" in row and not pd.isna(row["_n_prompt"]) else P_IN
-    alpha = (2 * N * p_in * BATCH) / (C * t_prefill)
+
+    # Detect prefill regime. If observed prefill time is within memory-bound
+    # floor (t = W/MBW at β=1.0), alpha is unidentifiable from this row —
+    # the formula returned t_pre_mem, not t_pre_compute. Solving the compute
+    # equation in that case yields garbage (often α >> 1 once filtered out by
+    # filter_outliers, but for borderline rows it gives plausible-looking
+    # but meaningless values). Mark such rows with NaN so downstream
+    # aggregation drops them.
+    t_pre_mem_floor = W / MBW
+    if t_prefill <= t_pre_mem_floor * 1.05:
+        alpha = float("nan")
+    else:
+        alpha = (2 * N * p_in * BATCH) / (C * t_prefill)
 
     # KV cache part (estimated from arch) (BUG-2)
     arch = _arch_for(n)
