@@ -69,9 +69,14 @@ def calibrate_row(row, hw):
     # Determine peak flops based on engine's compute path (BUG-1)
     engine_conf = ENGINE_DEFAULTS.get(backend, ENGINE_DEFAULTS["pytorch"])
     compute_bits = engine_conf.get("compute_path", 16)
-    C = get_peak_compute(hw, compute_bits)
     
-    MBW = get_memory_bandwidth(hw)
+    # Handle TP scaling (Step 4.7)
+    tp_size = HARDWARE_SPECS[hw].get("tp_size", 1)
+    tp_eff = HARDWARE_SPECS[hw].get("tp_efficiency", 1.0)
+    
+    C = get_peak_compute(hw, compute_bits) * tp_size * tp_eff
+    MBW = get_memory_bandwidth(hw) * tp_size * tp_eff
+    
     N = n * 1e9
     W = N * bits / 8
 

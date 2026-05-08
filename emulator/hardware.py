@@ -43,6 +43,16 @@ HARDWARE_SPECS = {
         "memory_capacity_gb": 64.0,
         "tdp_w": 385,
     },
+    "2xRTX-3090": {
+        # Dual RTX 3090 setup
+        # TP efficiency is significantly lower on PCIe 3.0 (observed ~0.50 for layer split)
+        "peak_tflops": {16: 284.0, 8: 568.0, 4: 568.0},
+        "memory_bandwidth_gbs": 1872.0,
+        "memory_capacity_gb": 48.0,
+        "tdp_w": 700,
+        "tp_size": 2,
+        "tp_efficiency": 0.50,
+    },
 }
 
 

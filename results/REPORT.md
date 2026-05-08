@@ -174,3 +174,29 @@ The initial calibration showed significantly lower values ($\alpha \approx 0.09,
 - **Compute Path**: Corrected peak FLOPS calculation for GGUF (must use FP16 path, 142 TFLOPS).
 - **KV Context**: Used real `n_depth` instead of fixed 288 tokens.
 - **Result**: Calibrated medians improved to **$\alpha=0.36, \beta=0.72$**, aligning with hardware limits.
+
+## Multi-GPU calibration (2× RTX 3090)
+
+> Added 2026-05-08.
+
+### Setup
+We tested large models that either fit on one card (Qwen-32B) or require two (Llama-70B) to measure scaling efficiency. 
+- **Hardware**: 2× RTX 3090 connected via PCIe 3.0 (No NVLink).
+- **Models**: Qwen-2.5-32B (Q4_K_M), Llama-3.1-70B (Q4_K_M).
+
+### TP Efficiency Observed
+We used 'split-mode: layer' as the baseline for multi-GPU performance.
+- **Qwen-32B Single-GPU pp512**: 1367.77 t/s
+- **Qwen-32B Multi-GPU pp512 (layer)**: 1367.39 t/s
+- **TP Efficiency (layer)**: **0.500**
+
+Efficiency is heavily limited by the PCIe 3.0 bus bandwidth during layer synchronization and all-reduce operations. 'split-mode: row' showed even lower performance (614 t/s), confirming that data-parallel or simple layer-parallel is preferred over tensor-parallel on this specific hardware interconnect.
+
+### Large Model Throughput
+- **Llama-70B Q4_K_M (2× 3090)**:
+  - Prefill (pp512): 638.6 t/s
+  - Decode (tg64): **19.33 t/s**
+  - Bottleneck: Memory Bandwidth (PCIe overhead included in calibrated beta).
+
+### Emulator Updates
+The 'predict()' function now supports 'tp_size' and 'tp_efficiency' parameters. The '2xRTX-3090' hardware entry was added with a conservative **0.50** efficiency multiplier.

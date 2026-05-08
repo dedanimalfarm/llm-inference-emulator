@@ -64,6 +64,8 @@ def predict(
     kv_heads: Optional[int] = None,
     kv_bits_k: float = 16.0,
     kv_bits_v: float = 16.0,
+    tp_size: int = 1,
+    tp_efficiency: float = 1.0,
 ) -> InferenceResult:
     if layers is None or d_model is None:
         arch = _arch_for(n_params_b)
@@ -74,17 +76,21 @@ def predict(
     N = n_params_b * 1e9
     W = N * bits / 8.0  # weights in bytes
 
+    # effective resources for multi-GPU TP
+    eff_flops = peak_flops * tp_size * tp_efficiency
+    eff_mbw = mem_bw * tp_size * tp_efficiency
+
     # ---- prefill ----
-    t_pre_compute = 2.0 * N * p_in * batch / (peak_flops * alpha)
-    t_pre_mem     = W / mem_bw
+    t_pre_compute = 2.0 * N * p_in * batch / (eff_flops * alpha)
+    t_pre_mem     = W / eff_mbw
     if t_pre_compute >= t_pre_mem:
         t_pre, b_pre = t_pre_compute, "compute"
     else:
         t_pre, b_pre = t_pre_mem, "memory"
 
     # ---- decode (single token, static base) ----
-    t_dec_mem     = W / (mem_bw * beta)
-    t_dec_compute = 2.0 * N * batch / (peak_flops * alpha)
+    t_dec_mem     = W / (eff_mbw * beta)
+    t_dec_compute = 2.0 * N * batch / (eff_flops * alpha)
     if t_dec_mem >= t_dec_compute:
         t_dec_base, b_dec = t_dec_mem, "memory"
     else:
@@ -104,7 +110,7 @@ def predict(
         # Fallback to full attention if kv_heads not specified
         kv_per_token_bytes = layers * d_model * (kv_bits_k + kv_bits_v) / 8.0
         
-    t_kv = kv_per_token_bytes * avg_ctx / (mem_bw * beta)
+    t_kv = kv_per_token_bytes * avg_ctx / (eff_mbw * beta)
     t_dec = t_dec_base + t_kv
 
     bs_eff = batch * batch_mult
