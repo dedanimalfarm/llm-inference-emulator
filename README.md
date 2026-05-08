@@ -42,6 +42,17 @@ where:
 **Engines** don't change `C`/`MBW` (those are physics). They change `α`, `β`,
 `γ_batch` — see [`emulator/engines.py`](emulator/engines.py).
 
+### Supported Engines (Calibration Status)
+
+| Engine | $\alpha$ (Prefill) | $\beta$ (Decode) | Status |
+|---|---:|---:|---|
+| PyTorch | 0.20 | 0.55 | literature default |
+| llama.cpp | **0.36** | **0.72** | **calibrated on RTX 3090** |
+| vLLM | 0.40 | 0.75 | literature default |
+
+> [!WARNING]
+> **llama.cpp Mixed-Precision KV**: Using asymmetric KV cache (e.g. `f16` keys and `q8_0` values) in `llama.cpp` hits a slow fallback path, causing a **50× performance regression** in prefill. Always use symmetric KV quantization (both `q8_0` or both `q4_0`).
+
 ## Quick start
 
 ```bash

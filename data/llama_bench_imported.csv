@@ -1,7 +1,0 @@
-Experiment 🧪,Model 🤗,Prefill (s),Per Token (s),Decode (tokens/s),Energy (tokens/kWh),Backend 🏭,Precision 📥,Quantization 🗜️,Attention 👁️,Kernel ⚛️,Architecture 🏛️,End-to-End (s),Open LLM Score (%),Params (B),Memory (MB),_effective_bpw,_n_threads,_n_batch,_n_gpu_layers,_kv_type_k,_kv_type_v,_n_depth,_hw
-qwen2 7B Q4_K - Medium|t=8|ngl=99,qwen2 7B Q4_K - Medium,0.0698,0.008292,120.6,,llama.cpp,int4/8,Q4_K (4.91bpw),Eager,llama.cpp,qwen2 7B Q4_K - Medium,1.1311,,7.616,4460.4,4.9132,8,2048,99,f16,f16,0,1xA10
-qwen2 7B Q4_K - Medium|t=8|ngl=99,qwen2 7B Q4_K - Medium,0.0797,0.008568,116.71,,llama.cpp,int4/8,Q4_K (4.91bpw),Eager,llama.cpp,qwen2 7B Q4_K - Medium,1.1764,,7.616,4461.4,4.9132,8,2048,99,f16,f16,512,1xA10
-llama 7B mostly Q4_0|t=8|ngl=99,llama 7B mostly Q4_0,0.2161,0.007565,132.19,,llama.cpp,int4/8,Q4_0 (4.54bpw),Eager,llama.cpp,llama 7B mostly Q4_0,1.1844,,6.738,3648.6,4.5421,8,2048,99,f16,f16,0,1xA10
-llama 13B mostly Q4_0|t=8|ngl=99,llama 13B mostly Q4_0,0.3551,0.01217,82.17,,llama.cpp,int4/8,Q4_0 (4.52bpw),Eager,llama.cpp,llama 13B mostly Q4_0,1.9128,,13.018,7020.6,4.524,8,2048,99,f16,f16,0,1xA10
-llama 7B mostly Q4_0|t=8|ngl=0,llama 7B mostly Q4_0,1.982,0.059844,16.71,,llama.cpp,int4/8,Q4_0 (4.54bpw),Eager,llama.cpp,llama 7B mostly Q4_0,2.9395,,6.738,3648.6,4.5421,8,2048,0,f16,f16,0,1xA10
-llama 7B mostly Q4_0|t=32|ngl=0,llama 7B mostly Q4_0,1.0847,0.060938,16.41,,llama.cpp,int4/8,Q4_0 (4.54bpw),Eager,llama.cpp,llama 7B mostly Q4_0,2.0598,,6.738,3648.6,4.5421,32,2048,0,f16,f16,0,1xA10
