@@ -72,6 +72,23 @@ HARDWARE_SPECS = {
         "tp_size": 2,
         "tp_efficiency": 0.50,    # split-mode=layer (pipeline parallel)
     },
+    "1xRTX-5090": {
+        # NVIDIA RTX 5090 — Blackwell consumer
+        "peak_tflops": {16: 419.0, 8: 838.0, 4: 1676.0},
+        "memory_bandwidth_gbs": 1792.0,
+        "memory_capacity_gb": 32.0,
+        "tdp_w": 575,
+    },
+    "2xRTX-5090": {
+        # Dual RTX 5090 setup
+        "peak_tflops": {16: 419.0, 8: 838.0, 4: 1676.0},
+        "memory_bandwidth_gbs": 1792.0,
+        "memory_capacity_gb": 64.0,
+        "tdp_w": 1150,
+        "tp_size": 2,
+        "tp_efficiency": 1.0,  # placeholder, calibrate from vLLM TP=2 runs
+        "notes": "PCIe 5.0 x16, no NVLink",
+    },
 }
 
 
