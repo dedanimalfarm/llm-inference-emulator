@@ -148,8 +148,12 @@ def calibrate(per_hw_df: dict) -> pd.DataFrame:
 
 def filter_outliers(calib_df: pd.DataFrame,
                     alpha_range=(0.005, 1.0),
-                    beta_range=(0.005, 1.0)) -> pd.DataFrame:
-    """Drop rows whose alpha/beta are physically implausible."""
+                    beta_range=(0.005, 20.0)) -> pd.DataFrame:
+    """Drop rows whose alpha/beta are physically implausible.
+    
+    For beta, we allow up to 20.0 to accommodate massive throughput gains
+     from continuous batching in engines like vLLM.
+    """
     mask = calib_df["beta_decode"].between(*beta_range)
     # alpha can be NaN if prefill wasn't identifiable
     alpha_mask = calib_df["alpha_prefill"].isna() | calib_df["alpha_prefill"].between(*alpha_range)

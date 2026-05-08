@@ -49,11 +49,28 @@ def parse_vllm_json(path):
         
         # Estimate input/output len from total_num_tokens and num_requests if missing
         if "input_len" not in r and "total_num_tokens" in r and "num_requests" in r:
-            # Assuming fixed split 256/64 as per our benchmark run
-            r["input_len"] = 256
-            r["output_len"] = 64
+            # vLLM 0.20.1 defaults for random dataset
+            r["input_len"] = 1024
+            r["output_len"] = 128
 
     return rows
+
+def parse_vllm_log(path):
+    """Extract 'Avg prompt throughput' from vLLM log if available."""
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, 'r') as f:
+            for line in f:
+                if "Avg prompt throughput:" in line:
+                    # INFO 05-08 23:33:44 [loggers.py:271] Engine 000: Avg prompt throughput: 4971.3 tokens/s
+                    parts = line.split("Avg prompt throughput:")
+                    if len(parts) > 1:
+                        val = parts[1].split("tokens/s")[0].strip()
+                        return float(val)
+    except:
+        pass
+    return None
 
 def to_internal_schema(results, hw):
     out = []
@@ -61,27 +78,27 @@ def to_internal_schema(results, hw):
         model = r.get("model", "unknown")
         params_b = r.get("params_b", 7.0)
         n_batch = r.get("num_requests", 1)
-        p_in = r.get("input_len", 256)
-        p_out = r.get("output_len", 64)
+        p_in = r.get("input_len", 1024)
+        p_out = r.get("output_len", 128)
         
-        # TTFT not in summary, use End-to-End as upper bound or leave NaN
-        ttft_avg = float("nan")
+        # TTFT or calculated from prompt throughput
+        prompt_tps = r.get("prompt_tps")
+        prefill_s = p_in / prompt_tps if prompt_tps and prompt_tps > 0 else float("nan")
         
         # tokens_per_second is total throughput. 
-        # Output throughput = total_throughput * (output_len / (input_len + output_len))
         total_tps = r.get("tokens_per_second", 0)
         decode_tps = total_tps * (p_out / (p_in + p_out))
         
         tp = r.get("tp", 1)
-        quant = "AWQ.4bit" # all our vLLM tests used AWQ
+        quant = "AWQ.4bit" 
         
         # Estimate memory (BUG-5)
-        memory_mb = (params_b * 1000 * 4 / 8) + 1024 # weights + small overhead
+        memory_mb = (params_b * 1000 * 4 / 8) + 1024
 
         out.append({
             "Experiment 🧪":     f"{model}|bs={n_batch}|tp={tp}",
             "Model 🤗":          model,
-            "Prefill (s)":       ttft_avg,
+            "Prefill (s)":       round(prefill_s, 4) if not pd.isna(prefill_s) else float("nan"),
             "Per Token (s)":     round(1.0 / decode_tps, 6) if decode_tps > 0 else float("nan"),
             "Decode (tokens/s)": round(decode_tps, 3),
             "Energy (tokens/kWh)": float("nan"),
@@ -112,7 +129,13 @@ def main():
 
     all_results = []
     for path in args.inputs:
-        all_results.extend(parse_vllm_json(path))
+        rows = parse_vllm_json(path)
+        # Try to find log file
+        log_path = os.path.join(os.path.dirname(path), "logs", os.path.basename(path).replace(".json", ".log"))
+        prompt_tps = parse_vllm_log(log_path)
+        for r in rows:
+            r["prompt_tps"] = prompt_tps
+        all_results.extend(rows)
     
     print(f"Loaded {len(all_results)} vLLM benchmark results")
     out = to_internal_schema(all_results, args.hw)
