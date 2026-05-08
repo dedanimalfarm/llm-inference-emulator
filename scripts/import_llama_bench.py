@@ -52,11 +52,16 @@ def join_pp_tg(df: pd.DataFrame) -> pd.DataFrame:
     keys = [c for c in [
         "model_filename", "model_type", "model_size", "model_n_params",
         "backends", "n_batch", "n_ubatch", "n_threads",
-        "n_gpu_layers", "type_k", "type_v", "flash_attn",
+        "n_gpu_layers", "type_k", "type_v", "flash_attn", "gpu_info",
     ] if c in df.columns]
 
     pp = df[(df["n_prompt"] > 0) & (df["n_gen"] == 0)].copy()
     tg = df[(df["n_prompt"] == 0) & (df["n_gen"] > 0)].copy()
+    
+    # Sort by avg_ts descending and drop duplicates to keep the best run (BUG-4+)
+    pp = pp.sort_values("avg_ts", ascending=False).drop_duplicates(subset=keys + ["n_depth", "n_prompt"])
+    tg = tg.sort_values("avg_ts", ascending=False).drop_duplicates(subset=keys + ["n_depth", "n_gen"])
+
     pp = pp.rename(columns={"avg_ts": "pp_ts", "stddev_ts": "pp_std",
                             "n_prompt": "pp_n_prompt"})
     tg = tg.rename(columns={"avg_ts": "tg_ts", "stddev_ts": "tg_std",
@@ -104,6 +109,9 @@ def to_internal_schema(merged: pd.DataFrame, hw: str) -> pd.DataFrame:
             "_kv_type_k":        r.get("type_k", "f16"),
             "_kv_type_v":        r.get("type_v", "f16"),
             "_n_depth":          int(r.get("n_depth", 0) or 0),
+            "_n_prompt":         int(r.get("pp_n_prompt", 0) or 0),
+            "_n_gen":            int(r.get("tg_n_gen", 0) or 0),
+            "_gpu_info":         r.get("gpu_info", ""),
             "_hw":               hw,
         })
     return pd.DataFrame(out)

@@ -12,6 +12,7 @@ import pandas as pd
 import numpy as np
 from .hardware import get_peak_compute, get_memory_bandwidth, HARDWARE_SPECS
 from .formula import _arch_for
+from .engines import ENGINE_DEFAULTS
 
 
 # benchmark scenario constants from the LLM-Perf Leaderboard
@@ -51,6 +52,8 @@ def calibrate_row(row, hw):
     """Return (alpha_prefill, beta_decode, t_kv_estimated) for one row."""
     n = float(row["Params (B)"])
     quant = row["Quantization 🗜️"]
+    backend = row.get("Backend 🏭", "pytorch")
+    
     if "_effective_bpw" in row and not pd.isna(row["_effective_bpw"]):
         bits = float(row["_effective_bpw"])
     else:
@@ -63,7 +66,11 @@ def calibrate_row(row, hw):
 
     t_per_token = 1.0 / decode_tps
 
-    C = get_peak_compute(hw, bits)
+    # Determine peak flops based on engine's compute path (BUG-1)
+    engine_conf = ENGINE_DEFAULTS.get(backend, ENGINE_DEFAULTS["pytorch"])
+    compute_bits = engine_conf.get("compute_path", 16)
+    C = get_peak_compute(hw, compute_bits)
+    
     MBW = get_memory_bandwidth(hw)
     N = n * 1e9
     W = N * bits / 8
@@ -71,10 +78,22 @@ def calibrate_row(row, hw):
     p_in = float(row["_n_prompt"]) if "_n_prompt" in row and not pd.isna(row["_n_prompt"]) else P_IN
     alpha = (2 * N * p_in * BATCH) / (C * t_prefill)
 
-    # KV cache part (estimated from arch)
+    # KV cache part (estimated from arch) (BUG-2)
     arch = _arch_for(n)
-    kv_per_token_bytes = 2 * arch["layers"] * arch["d_model"] * 2
-    avg_ctx = P_IN + P_OUT / 2
+    layers = arch["layers"]
+    d_model = arch["d_model"]
+    kv_heads = arch.get("kv_heads")
+    
+    n_depth = float(row.get("_n_depth", 0)) if not pd.isna(row.get("_n_depth")) else 0
+    n_gen = float(row.get("_n_gen", P_OUT)) if not pd.isna(row.get("_n_gen")) else P_OUT
+    avg_ctx = n_depth + n_gen / 2
+    
+    # head_dim is usually 128
+    if kv_heads is not None:
+        kv_per_token_bytes = layers * kv_heads * 128 * 2 * 2 # K+V, FP16
+    else:
+        kv_per_token_bytes = layers * d_model * 2 * 2
+    
     # for beta we factor out the KV term; assume KV reads use the same MBU
     # so the equation t_token = (W / (MBW*beta)) + (kv*ctx / (MBW*beta))
     # => beta = (W + kv*ctx) / (MBW * t_per_token)
@@ -105,6 +124,10 @@ def calibrate(per_hw_df: dict) -> pd.DataFrame:
                 "backend": r.get("Backend 🏭"),
                 "prefill_s_obs": r.get("Prefill (s)"),
                 "decode_tps_obs": r.get("Decode (tokens/s)"),
+                "_n_batch": r.get("_n_batch"),
+                "_n_depth": r.get("_n_depth"),
+                "_n_prompt": r.get("_n_prompt"),
+                "_n_threads": r.get("_n_threads"),
                 **res,
             })
     return pd.DataFrame(rows)

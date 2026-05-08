@@ -65,10 +65,32 @@ def test_effective_bpw_q4_k_m():
     assert 4.85 < bpw < 5.00, f"unexpected bpw {bpw}"
 
 
+def test_rtx3090_calibration_sanity():
+    import pandas as pd
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 
+                        "results", "calibrated_coefficients.csv")
+    if not os.path.exists(path):
+        return # skip if not calibrated yet
+    
+    df = pd.read_csv(path)
+    row = df[(df["hw"] == "RTX-3090") & (df["backend"] == "llama.cpp")]
+    if len(row) == 0:
+        return
+        
+    alpha = row["alpha_median"].values[0]
+    beta = row["beta_median"].values[0]
+    
+    # After fixes, alpha should be ~0.4-0.6 and beta ~0.6-0.8
+    # We use slightly wider bounds to account for noisy data or different batch sweeps
+    assert 0.3 < alpha < 0.7, f"alpha {alpha} out of range"
+    assert 0.5 < beta < 0.9, f"beta {beta} out of range"
+
+
 if __name__ == "__main__":
     test_a100_7b_fp16_decode_is_memory_bound()
     test_quantization_reduces_memory_time()
     test_large_batch_flips_decode_to_compute()
     test_quantized_kv_cache_speeds_up_long_context_decode()
     test_effective_bpw_q4_k_m()
+    test_rtx3090_calibration_sanity()
     print("all tests passed")

@@ -24,13 +24,18 @@ class InferenceResult:
 # Rough heuristic shapes for typical decoder-only architectures.
 # For finer accuracy, pass `layers` and `d_model` explicitly.
 ARCH_DEFAULTS = {
-    1.0:  {"layers": 22, "d_model": 2048},
-    3.0:  {"layers": 26, "d_model": 3072},
-    7.0:  {"layers": 32, "d_model": 4096},
-    13.0: {"layers": 40, "d_model": 5120},
-    34.0: {"layers": 48, "d_model": 7168},
-    70.0: {"layers": 80, "d_model": 8192},
-    110.0:{"layers": 80, "d_model": 8192},
+    # size_b: {layers, d_model, kv_heads}
+    # kv_heads defaults to None (means same as heads, which is d_model/128)
+    1.0:  {"layers": 22, "d_model": 2048, "kv_heads": 32}, # generic
+    1.5:  {"layers": 28, "d_model": 1536, "kv_heads": 2},  # Qwen2.5-1.5B
+    3.0:  {"layers": 36, "d_model": 2048, "kv_heads": 2},  # Qwen2.5-3B
+    7.0:  {"layers": 28, "d_model": 3584, "kv_heads": 4},  # Qwen2.5-7B
+    8.0:  {"layers": 32, "d_model": 4096, "kv_heads": 8},  # Llama-3.1-8B
+    13.0: {"layers": 40, "d_model": 5120, "kv_heads": 40}, # Llama-2-13B (Full)
+    14.0: {"layers": 48, "d_model": 5120, "kv_heads": 8},  # Qwen2.5-14B
+    34.0: {"layers": 48, "d_model": 7168, "kv_heads": 8},  # Yi-34B
+    70.0: {"layers": 80, "d_model": 8192, "kv_heads": 8},  # Llama-3-70B
+    110.0:{"layers": 80, "d_model": 8192, "kv_heads": 8},
 }
 
 
@@ -56,6 +61,7 @@ def predict(
     batch_mult: float = 1.0,
     layers: Optional[int] = None,
     d_model: Optional[int] = None,
+    kv_heads: Optional[int] = None,
     kv_bits_k: float = 16.0,
     kv_bits_v: float = 16.0,
 ) -> InferenceResult:
@@ -63,6 +69,7 @@ def predict(
         arch = _arch_for(n_params_b)
         layers = arch["layers"] if layers is None else layers
         d_model = arch["d_model"] if d_model is None else d_model
+        kv_heads = arch.get("kv_heads") if kv_heads is None else kv_heads
 
     N = n_params_b * 1e9
     W = N * bits / 8.0  # weights in bytes
@@ -86,7 +93,17 @@ def predict(
     # ---- KV-cache cost averaged over the response ----
     # K and V can be stored at different precisions (e.g. llama.cpp -ctk Q8_0 -ctv Q4_0)
     avg_ctx = p_in + p_out / 2.0
-    kv_per_token_bytes = layers * d_model * (kv_bits_k + kv_bits_v) / 8.0
+    
+    # head_dim is usually 128 or d_model/heads.
+    # For simplicity in this roofline, we use d_model and kv_heads/total_heads ratio.
+    # But llama.cpp/GGUF uses: layers * kv_heads * head_dim * 2 (for K and V) * bytes_per_element
+    # We'll assume head_dim = 128 as it's nearly universal for these models.
+    if kv_heads is not None:
+        kv_per_token_bytes = layers * kv_heads * 128 * (kv_bits_k + kv_bits_v) / 8.0
+    else:
+        # Fallback to full attention if kv_heads not specified
+        kv_per_token_bytes = layers * d_model * (kv_bits_k + kv_bits_v) / 8.0
+        
     t_kv = kv_per_token_bytes * avg_ctx / (mem_bw * beta)
     t_dec = t_dec_base + t_kv
 
