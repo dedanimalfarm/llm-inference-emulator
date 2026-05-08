@@ -44,14 +44,28 @@ HARDWARE_SPECS = {
         "tdp_w": 385,
     },
     "2xRTX-3090": {
-        # Dual RTX 3090 setup
-        # TP efficiency is significantly lower on PCIe 3.0 (observed ~0.50 for layer split)
+        # Dual RTX 3090 over PCIe 3.0 (no NVLink).
+        #
+        # IMPORTANT — this profile gives CAPACITY benefit, not throughput:
+        #   With tp_size=2 and tp_efficiency=0.50, predict() returns the same
+        #   latency as a single RTX-3090 for any model that fits on one card.
+        #   That is mathematically correct: 2 × 0.5 = 1.0× scaling.
+        #
+        # Why: llama.cpp split-mode `layer` is pipeline-parallel — tokens
+        # traverse GPUs sequentially, throughput equals single-card. The 0.50
+        # efficiency is empirically measured (not literature default), see
+        # results/REPORT.md "Multi-GPU calibration" section.
+        #
+        # Use this profile only when the model exceeds 24 GB VRAM (e.g.
+        # Llama-70B Q4_K_M ≈ 40 GB). For smaller models, use "RTX-3090".
+        # For real tensor-parallel speedup, hardware needs NVLink (A100 SXM,
+        # H100) and a different engine (vLLM with NCCL).
         "peak_tflops": {16: 284.0, 8: 568.0, 4: 568.0},
         "memory_bandwidth_gbs": 1872.0,
         "memory_capacity_gb": 48.0,
         "tdp_w": 700,
         "tp_size": 2,
-        "tp_efficiency": 0.50,
+        "tp_efficiency": 0.50,    # split-mode=layer (pipeline parallel)
     },
 }
 

@@ -184,19 +184,83 @@ We tested large models that either fit on one card (Qwen-32B) or require two (Ll
 - **Hardware**: 2× RTX 3090 connected via PCIe 3.0 (No NVLink).
 - **Models**: Qwen-2.5-32B (Q4_K_M), Llama-3.1-70B (Q4_K_M).
 
-### TP Efficiency Observed
-We used 'split-mode: layer' as the baseline for multi-GPU performance.
-- **Qwen-32B Single-GPU pp512**: 1367.77 t/s
-- **Qwen-32B Multi-GPU pp512 (layer)**: 1367.39 t/s
-- **TP Efficiency (layer)**: **0.500**
+### Two split modes — two different parallelism strategies
 
-Efficiency is heavily limited by the PCIe 3.0 bus bandwidth during layer synchronization and all-reduce operations. 'split-mode: row' showed even lower performance (614 t/s), confirming that data-parallel or simple layer-parallel is preferred over tensor-parallel on this specific hardware interconnect.
+llama.cpp offers two `--split-mode` strategies on multi-GPU, and they
+behave very differently:
 
-### Large Model Throughput
-- **Llama-70B Q4_K_M (2× 3090)**:
-  - Prefill (pp512): 638.6 t/s
-  - Decode (tg64): **19.33 t/s**
-  - Bottleneck: Memory Bandwidth (PCIe overhead included in calibrated beta).
+| Split mode | What it does | What it parallelises |
+|---|---|---|
+| `layer` | partitions decoder layers across GPUs | **pipeline parallel** (sequential) |
+| `row`   | partitions weight tensors across GPUs (per-layer) | **tensor parallel** (concurrent) |
 
-### Emulator Updates
-The 'predict()' function now supports 'tp_size' and 'tp_efficiency' parameters. The '2xRTX-3090' hardware entry was added with a conservative **0.50** efficiency multiplier.
+Both add multi-GPU **capacity**, but only `row` adds compute concurrency.
+
+### Observed numbers (Qwen-2.5-32B Q4_K_M, pp512 baseline)
+
+| Configuration | pp512 (t/s) | TP-efficiency vs theoretical 2× |
+|---|---:|---:|
+| Single GPU (1× 3090) | 1367.77 | (baseline) |
+| Multi-GPU `layer` split | **1367.39** | **0.500** |
+| Multi-GPU `row` split   | 614.72   | 0.225 |
+
+### Interpretation
+
+**Layer split = pipeline parallel.** Each token traverses both GPUs
+sequentially — GPU 0 runs layers 1-32, then hands the activations to
+GPU 1 for layers 33-64. The two cards do **not** work concurrently on
+the same token; they alternate. So aggregate throughput is bounded by
+single-card throughput, not 2×. The "0.50 TP-efficiency" by our metric
+(`multi / (2 × single)`) is the inevitable consequence — we expected
+2× and got 1×.
+
+**Row split = real tensor parallel.** Each layer's weights are sliced
+between cards and computed concurrently; an all-reduce after the
+matmul reconciles partial outputs. This **does** require fast
+inter-GPU bandwidth, which PCIe 3.0 (16 GB/s) lacks compared to
+NVLink (300+ GB/s on H100). Result: row-split is **slower than single
+card** (0.225 efficiency) because inter-GPU communication eats more
+than the parallelism saves.
+
+### So what does multi-GPU on 2× 3090 actually buy?
+
+**Capacity, not throughput.** It lets you run models that don't fit on a
+single 24 GB card (like Llama-70B Q4_K_M ≈ 40 GB). For models that
+fit on one card, a second 3090 is useless for performance — you get
+the same prefill and same decode as with one card.
+
+Practical implications for emulator users:
+- `predict(model=7B, hw="2xRTX-3090")` returns **the same latency** as
+  `predict(model=7B, hw="RTX-3090")` — that's mathematically correct
+  (`tp_size × tp_efficiency = 2 × 0.5 = 1.0`).
+- Only consider 2× 3090 when the model exceeds 24 GB.
+- For higher throughput on small models, prefer **one bigger GPU** (A100,
+  H100, etc.) over **two smaller ones** without NVLink.
+
+### Large model that needs both cards (Llama-3.1-70B Q4_K_M)
+
+40 GB weights — fits only when split across two cards.
+
+| Metric | Value |
+|---|---:|
+| pp512 | 638.6 t/s |
+| tg64  | **19.33 t/s** |
+
+Decode 19 t/s on a $1500 used-3090-pair is competitive with cloud
+A100 deploy of the same model. The bottleneck is memory bandwidth on
+the local cards (936 GB/s × 2 effective ≈ 1.87 TB/s combined for
+weights, but each card serves only its own slice).
+
+### Emulator updates from this study
+
+- `predict()` accepts `tp_size: int = 1` and `tp_efficiency: float = 1.0`.
+  Default behaviour unchanged.
+- `2xRTX-3090` entry added to `HARDWARE_SPECS` with `tp_size=2,
+  tp_efficiency=0.50`.
+- `engines.py['llama.cpp']` notes already warn about mixed-quant KV
+  (50× regression). No change there.
+
+The 0.50 efficiency is **not** a literature-default — it is empirically
+measured for `split-mode layer` (the most common llama.cpp config). For
+other engines (vLLM with NCCL all-reduce on NVLink hosts), `tp_efficiency`
+should be re-calibrated separately.
