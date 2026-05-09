@@ -103,11 +103,24 @@ def predict(
     eff_flops = peak_flops * tp_size * tp_efficiency
     eff_mbw = mem_bw * tp_size * tp_efficiency
 
+    # ---- Effective concurrent batch (continuous-batching saturation) ----
+    # Scheduler can keep `batch_max` slots filled; saturation curve is a
+    # Hill-style approximation: at batch == batch_50pct the effective
+    # concurrency is half of batch_max; at batch >> batch_50pct it asymptotes.
+    # Computed BEFORE the timing terms because both prefill and decode compute
+    # scale with the *active* batch, not the queued batch.
+    if batch_saturation is not None:
+        batch_max, batch_50pct = batch_saturation
+        bs_eff = batch_max * batch / (batch + batch_50pct)
+    else:
+        bs_eff = float(batch)
+
     # ---- prefill ----
     # Prefix caching: cached tokens skip the matmul entirely. Memory term
     # (weight load) is unaffected — weights still have to be read once.
+    # Compute term scales with bs_eff (active concurrency), not raw batch.
     p_in_eff = p_in * (1.0 - prefix_cache_hit)
-    t_pre_compute = 2.0 * N * p_in_eff * batch / (eff_flops * alpha)
+    t_pre_compute = 2.0 * N * p_in_eff * bs_eff / (eff_flops * alpha)
     t_pre_mem     = W / eff_mbw
     if t_pre_compute >= t_pre_mem:
         t_pre, b_pre = t_pre_compute, "compute"
@@ -115,8 +128,10 @@ def predict(
         t_pre, b_pre = t_pre_mem, "memory"
 
     # ---- decode (single token, static base) ----
+    # Memory term is independent of batch (weights read once per step).
+    # Compute term scales with bs_eff (active concurrent requests per step).
     t_dec_mem     = W / (eff_mbw * beta)
-    t_dec_compute = 2.0 * N * batch / (eff_flops * alpha)
+    t_dec_compute = 2.0 * N * bs_eff / (eff_flops * alpha)
     if t_dec_mem >= t_dec_compute:
         t_dec_base, b_dec = t_dec_mem, "memory"
     else:
@@ -149,16 +164,6 @@ def predict(
         t_dec_final = t_dec * (1.0 + spec_overhead) / accepted_per_step
     else:
         t_dec_final = t_dec
-
-    # ---- Effective concurrent batch (continuous-batching saturation) ----
-    # Scheduler can keep `batch_max` slots filled; saturation curve is a
-    # Hill-style approximation: at batch == batch_50pct the effective
-    # concurrency is half of batch_max; at batch >> batch_50pct it asymptotes.
-    if batch_saturation is not None:
-        batch_max, batch_50pct = batch_saturation
-        bs_eff = batch_max * batch / (batch + batch_50pct)
-    else:
-        bs_eff = float(batch)
 
     # ---- Memory budget ----
     # Naive allocators reserve a worst-case KV buffer per request; PagedAttention

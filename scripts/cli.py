@@ -50,24 +50,38 @@ def main():
 
     eng = ENGINE_DEFAULTS[args.engine]
     alpha, beta = eng["alpha"], eng["beta"]
+    sources = []
     if args.precision_label:
         a_cal, b_cal = get_calibrated(args.hw, args.engine, args.precision_label)
-        if a_cal is not None:
-            alpha, beta = a_cal, b_cal
-            print(f"# using calibrated coefs for ({args.hw}, {args.engine}, {args.precision_label})")
+        if a_cal is not None and a_cal == a_cal:
+            alpha = a_cal
+            sources.append("α=calibrated")
+        if b_cal is not None and b_cal == b_cal:
+            beta = b_cal
+            sources.append("β=calibrated")
         else:
-            print(f"# no calibration found, using engine defaults")
+            sources.append("β=engine-default (unidentifiable from current data)")
+    if sources:
+        print(f"# {', '.join(sources)} for ({args.hw}, {args.engine}, {args.precision_label})")
+    else:
+        print(f"# using engine defaults (no precision label given)")
 
+    # peak_flops lookup must use the engine's compute_path (the precision
+    # at which actual matmuls happen), not the weight bits. AWQ/GPTQ kernels
+    # dequantize to FP16 before GEMM, so weight=4-bit uses the FP16 path.
+    compute_bits = eng.get("compute_path", args.bits)
     res = predict(
         n_params_b=args.model,
         bits=args.bits,
         p_in=args.p_in, p_out=args.p_out, batch=args.batch,
-        peak_flops=get_peak_compute(args.hw, args.bits),
+        peak_flops=get_peak_compute(args.hw, compute_bits),
         mem_bw=get_memory_bandwidth(args.hw),
         alpha=alpha, beta=beta,
         batch_saturation=eng["batch_saturation"],
-        compute_path=eng.get("compute_path", 16),
+        compute_path=compute_bits,
         kv_bits_k=args.kv_bits_k, kv_bits_v=args.kv_bits_v,
+        tp_size=HARDWARE_SPECS[args.hw].get("tp_size", 1),
+        tp_efficiency=HARDWARE_SPECS[args.hw].get("tp_efficiency", 1.0),
     )
 
     print(f"\n{args.hw} | {args.engine} | {args.bits}-bit | {args.model}B params | bs={args.batch}")

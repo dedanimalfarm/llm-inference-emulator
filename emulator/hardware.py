@@ -80,14 +80,20 @@ HARDWARE_SPECS = {
         "tdp_w": 575,
     },
     "2xRTX-5090": {
-        # Dual RTX 5090 setup
+        # Dual RTX 5090 — Blackwell consumer, PCIe 5.0 x16, no NVLink.
+        #
+        # tp_efficiency = 0.74 calibrated empirically from vLLM AWQ
+        # multi-batch sweep (Qwen-7B): TP=2 asymptote 20796 t/s vs TP=1
+        # asymptote 14093 t/s → speedup 1.48× → tp_eff = 0.74.
+        # Larger models (32B, 70B) hide PCIe latency better; for a
+        # workload-specific number, recalibrate against the deployed model.
         "peak_tflops": {16: 419.0, 8: 838.0, 4: 1676.0},
         "memory_bandwidth_gbs": 1792.0,
         "memory_capacity_gb": 64.0,
         "tdp_w": 1150,
         "tp_size": 2,
-        "tp_efficiency": 1.0,  # placeholder, calibrate from vLLM TP=2 runs
-        "notes": "PCIe 5.0 x16, no NVLink",
+        "tp_efficiency": 0.74,
+        "notes": "PCIe 5.0 x16, no NVLink. tp_efficiency calibrated on Qwen-7B AWQ.",
     },
 }
 
