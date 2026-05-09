@@ -264,3 +264,108 @@ The 0.50 efficiency is **not** a literature-default — it is empirically
 measured for `split-mode layer` (the most common llama.cpp config). For
 other engines (vLLM with NCCL all-reduce on NVLink hosts), `tp_efficiency`
 should be re-calibrated separately.
+
+## RTX 5090 / vLLM calibration (Blackwell, partial)
+
+> Added 2026-05-09 from `data/raw_vllm/*.json` and engine logs collected
+> on a vast.ai 2× RTX 5090 instance.
+
+### Setup
+- **Hardware**: 2× NVIDIA RTX 5090 (Blackwell GB202, sm_120), 32 GB GDDR7
+  per card, 1.79 TB/s memory bandwidth, PCIe 5.0 x16 (no NVLink).
+- **Engine**: vLLM v0.20.1, AWQ-quantized models, Marlin GEMM kernel
+  confirmed in logs (`MarlinLinearKernel for AWQMarlinLinearMethod`).
+- **Models**: Qwen2.5-7B/32B-Instruct-AWQ, Llama-3.1-70B-Instruct-AWQ-INT4.
+- **Scenarios**: single batch=50 per (model, TP), input=1024, output=128.
+- **Caveats**: `--enforce-eager` was on (CUDA graphs and `torch.compile`
+  disabled); FlashAttention-2 fallback (FA3 is Hopper-only); prefix
+  caching enabled by default but not isolated as an experiment.
+
+### Calibrated coefficients
+
+```
+2xRTX-5090, vllm, AWQ.4bit:
+  α (prefill MFU) = 0.380 (median of 3 rows; 32B-TP1, 32B-TP2, 70B-TP2)
+  β (decode MBU)  = NaN — see "What β cannot tell us yet" below
+  n_rows = 3
+```
+
+α was solved from the engine-log snapshot `Avg prompt throughput`:
+
+  α = 2 · N · prompt_tps_aggregate / (peak_FLOPS · TP · TP_eff)
+
+This inversion is **batch-independent** in the compute-bound regime —
+each prefill token costs 2N FLOPS regardless of how many concurrent
+requests share the GPU. So a single batch sweep is sufficient.
+
+| Config | prompt_tps (agg) | α |
+|---|---:|---:|
+| Qwen-32B AWQ, TP=1   | 2789 t/s | 0.426 |
+| Qwen-32B AWQ, TP=2   | 4971 t/s | 0.380 (per-card, assuming TP_eff=1.0) |
+| Llama-70B AWQ, TP=2  | 2411 t/s | 0.296 (per-card, assuming TP_eff=1.0) |
+
+Qwen-7B configs are excluded — the run was too short (4.6 s) for
+vLLM's logger to emit a `prompt throughput` snapshot before the engine
+shut down.
+
+### What β cannot tell us yet
+
+vLLM `bench throughput` reports **aggregate** decode throughput across
+all concurrent requests. The single-request inversion
+
+  β = W / (MBW · t_per_token)
+
+would conflate batching gains with bandwidth utilization, producing
+β > 1.0 (a math artefact, **not** a "diagnostic of continuous batching").
+With one batch point per config, β and `batch_saturation` are
+mathematically degenerate — both trade against each other to fit the
+same observed aggregate decode rate.
+
+Solving requires a multi-batch sweep (e.g. `--num-prompts 50 100 200
+500 1000`) so the saturation curve `bs_eff(batch) = batch_max · batch /
+(batch + batch_50pct)` can be jointly fit alongside β. That sweep was
+not run in this session.
+
+For now, `β = NaN` in `calibrated_coefficients.csv` for vLLM rows. The
+literature default `β = 0.75` from `engines.py` is used at predict-time.
+A multi-batch sweep is queued in `scripts/run_vllm_sweep.sh`.
+
+### TP=2 efficiency on PCIe 5.0 (Blackwell, no NVLink)
+
+Single-batch comparison Qwen-7B AWQ:
+
+| TP | Total throughput (t/s) | Speedup |
+|---:|---:|---:|
+| 1  | 11992 | (baseline) |
+| 2  | 13424 | **1.12×** → tp_efficiency ≈ **0.56** |
+
+For 32B AWQ:
+
+| TP | Total throughput (t/s) | Speedup |
+|---:|---:|---:|
+| 1  | 2561 | (baseline) |
+| 2  | 4267 | **1.67×** → tp_efficiency ≈ **0.83** |
+
+Larger models hide PCIe 5.0 latency better — for 32B the per-layer
+all-reduce is small relative to compute, while for 7B all-reduce
+dominates. This matches the 2× RTX 3090 result (PCIe 3.0): smaller
+models take a steeper TP penalty.
+
+`HARDWARE_SPECS["2xRTX-5090"]` keeps `tp_efficiency: 1.0` as a
+placeholder — proper calibration of TP_eff requires the multi-batch
+sweep so we can separate communication overhead from saturation.
+
+### What the next session should add
+
+1. Multi-batch sweep: 50 / 100 / 200 / 500 / 1000 → fit
+   `(batch_max, batch_50pct)` and β jointly.
+2. Run **without** `--enforce-eager` to capture CUDA-graphs gain,
+   then with `--enforce-eager` to compute the delta.
+3. Run with `--no-enable-prefix-caching` to isolate APC contribution
+   to TTFT.
+4. Run with `--kv-cache-dtype fp8_e5m2` for FP8 KV-cache delta
+   (Blackwell native).
+5. Speculative decoding pair (Llama-3.1-8B + Llama-3.2-1B-Instruct)
+   to measure realistic `accept_rate`.
+
+These are queued in `scripts/run_vllm_sweep.sh` for a future GPU session.

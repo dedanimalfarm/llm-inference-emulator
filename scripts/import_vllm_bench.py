@@ -80,27 +80,40 @@ def to_internal_schema(results, hw):
         n_batch = r.get("num_requests", 1)
         p_in = r.get("input_len", 1024)
         p_out = r.get("output_len", 128)
-        
-        # TTFT or calculated from prompt throughput
-        prompt_tps = r.get("prompt_tps")
-        prefill_s = p_in / prompt_tps if prompt_tps and prompt_tps > 0 else float("nan")
-        
-        # tokens_per_second is total throughput. 
+
+        # Aggregate prompt throughput from engine log (snapshot during prefill).
+        # NaN if the run was too short for the engine to emit a logger line.
+        # We DO NOT divide by batch — α calibration uses aggregate FLOPS
+        # throughput directly (α = 2·N·prompt_tps / C), independent of batching.
+        prompt_tps_aggregate = r.get("prompt_tps")
+        if prompt_tps_aggregate is None or prompt_tps_aggregate <= 0:
+            prompt_tps_aggregate = float("nan")
+
+        # tokens_per_second from the JSON is end-to-end aggregate (prefill + decode
+        # interleaved). Output_tps is the decode-phase aggregate; we recover it
+        # by ratio because vLLM JSON doesn't break it out separately.
         total_tps = r.get("tokens_per_second", 0)
-        decode_tps = total_tps * (p_out / (p_in + p_out))
-        
+        decode_tps_aggregate = total_tps * (p_out / (p_in + p_out))
+
+        # NOTE: per-request prefill time is unidentifiable from a single batch
+        # run (need to know prefill concurrency, which depends on chunked-prefill
+        # scheduler decisions). Leave Prefill (s) as NaN; α is calibrated from
+        # _prompt_tps_agg via a vLLM-aware path in calibrate.py.
+        prefill_s = float("nan")
+
         tp = r.get("tp", 1)
-        quant = "AWQ.4bit" 
-        
+        quant = "AWQ.4bit"
+
         # Estimate memory (BUG-5)
         memory_mb = (params_b * 1000 * 4 / 8) + 1024
 
         out.append({
             "Experiment 🧪":     f"{model}|bs={n_batch}|tp={tp}",
             "Model 🤗":          model,
-            "Prefill (s)":       round(prefill_s, 4) if not pd.isna(prefill_s) else float("nan"),
-            "Per Token (s)":     round(1.0 / decode_tps, 6) if decode_tps > 0 else float("nan"),
-            "Decode (tokens/s)": round(decode_tps, 3),
+            "Prefill (s)":       float("nan"),
+            "Per Token (s)":     round(1.0 / decode_tps_aggregate, 6) if decode_tps_aggregate > 0 else float("nan"),
+            "Decode (tokens/s)": round(decode_tps_aggregate, 3),
+            "_prompt_tps_agg":   round(prompt_tps_aggregate, 3) if not pd.isna(prompt_tps_aggregate) else float("nan"),
             "Energy (tokens/kWh)": float("nan"),
             "Backend 🏭":         "vllm",
             "Precision 📥":       "int4/8",

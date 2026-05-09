@@ -44,6 +44,7 @@ hw,backend,precision_label,attention,n_rows,alpha_median,alpha_p25,alpha_p75,bet
 1xT4,pytorch,torchao.4bit,Eager,2,0.0434,0.0434,0.0434,0.0691,0.0691,0.0691
 1xT4,pytorch,torchao.4bit,SDPA,2,0.043,0.043,0.043,0.0656,0.0656,0.0656
 2xRTX-3090,llama.cpp,Q4_K (4.85bpw),FAv2,2,0.5821,0.5576,0.6066,0.831,0.8281,0.834
+2xRTX-5090,vllm,AWQ.4bit,PagedAttention,3,0.3797,0.2963,0.3912,,,
 32vCPU-C7i,pytorch,Unquantized,Eager,124,0.1891,0.1568,0.2286,0.3626,0.2785,0.4282
 32vCPU-C7i,pytorch,Unquantized,SDPA,76,0.1812,0.1507,0.2249,0.3856,0.3403,0.4408
 RTX-3090,llama.cpp,Q4_K (4.91bpw),Eager,4,0.3082,0.2396,0.4012,0.6667,0.6242,0.6986

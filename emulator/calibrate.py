@@ -69,48 +69,68 @@ def calibrate_row(row, hw):
     # Determine peak flops based on engine's compute path (BUG-1)
     engine_conf = ENGINE_DEFAULTS.get(backend, ENGINE_DEFAULTS["pytorch"])
     compute_bits = engine_conf.get("compute_path", 16)
-    
+
     # Handle TP scaling (Step 4.7)
     tp_size = HARDWARE_SPECS[hw].get("tp_size", 1)
     tp_eff = HARDWARE_SPECS[hw].get("tp_efficiency", 1.0)
-    
+
     C = get_peak_compute(hw, compute_bits) * tp_size * tp_eff
     MBW = get_memory_bandwidth(hw) * tp_size * tp_eff
-    
+
     N = n * 1e9
     W = N * bits / 8
 
     p_in = float(row["_n_prompt"]) if "_n_prompt" in row and not pd.isna(row["_n_prompt"]) else P_IN
 
-    alpha = float("nan")
-    if not pd.isna(t_prefill) and t_prefill > 0:
-        # Detect prefill regime. 
-        t_pre_mem_floor = W / MBW
-        if t_prefill <= t_pre_mem_floor * 1.05:
-            alpha = float("nan")
-        else:
-            alpha = (2 * N * p_in * BATCH) / (C * t_prefill)
+    # ---- vLLM aggregate-throughput path ----
+    # vLLM bench reports aggregate prompt/decode throughput across all concurrent
+    # requests. The single-request inversion below would conflate batch concurrency
+    # with MFU/MBU. For vLLM rows, calibrate α directly from aggregate prompt
+    # throughput (independent of batching in compute-bound regime) and leave β as
+    # NaN until a multi-batch sweep makes (β, batch_saturation) jointly fittable.
+    is_vllm = (backend == "vllm")
+    prompt_tps_agg = float(row.get("_prompt_tps_agg", float("nan"))) if "_prompt_tps_agg" in row else float("nan")
 
     # KV cache part (estimated from arch) (BUG-2)
     arch = _arch_for(n)
     layers = arch["layers"]
     d_model = arch["d_model"]
     kv_heads = arch.get("kv_heads")
-    
+
     n_depth = float(row.get("_n_depth", 0)) if not pd.isna(row.get("_n_depth")) else 0
     n_gen = float(row.get("_n_gen", P_OUT)) if not pd.isna(row.get("_n_gen")) else P_OUT
     avg_ctx = n_depth + n_gen / 2
-    
+
     # head_dim is usually 128
     if kv_heads is not None:
         kv_per_token_bytes = layers * kv_heads * 128 * 2 * 2 # K+V, FP16
     else:
         kv_per_token_bytes = layers * d_model * 2 * 2
-    
-    # for beta we factor out the KV term; assume KV reads use the same MBU
-    # so the equation t_token = (W / (MBW*beta)) + (kv*ctx / (MBW*beta))
-    # => beta = (W + kv*ctx) / (MBW * t_per_token)
-    beta = (W + kv_per_token_bytes * avg_ctx) / (MBW * t_per_token)
+
+    if is_vllm:
+        # α from aggregate prompt throughput in compute-bound regime:
+        #     α = 2·N·prompt_throughput_aggregate / C_eff
+        # No batch dependence: each prefill token costs 2N FLOPS regardless
+        # of how many concurrent requests share the GPU.
+        if not pd.isna(prompt_tps_agg) and prompt_tps_agg > 0:
+            alpha = (2.0 * N * prompt_tps_agg) / C
+        else:
+            alpha = float("nan")
+        # β unidentifiable from single-batch vLLM data — see header comment.
+        beta = float("nan")
+    else:
+        # Legacy LLM-Perf path (single-request, batch=1): existing inversion.
+        alpha = float("nan")
+        if not pd.isna(t_prefill) and t_prefill > 0:
+            t_pre_mem_floor = W / MBW
+            if t_prefill <= t_pre_mem_floor * 1.05:
+                alpha = float("nan")
+            else:
+                alpha = (2 * N * p_in * BATCH) / (C * t_prefill)
+        # for beta we factor out the KV term; assume KV reads use the same MBU
+        # so the equation t_token = (W / (MBW*beta)) + (kv*ctx / (MBW*beta))
+        # => beta = (W + kv*ctx) / (MBW * t_per_token)
+        beta = (W + kv_per_token_bytes * avg_ctx) / (MBW * t_per_token)
 
     return {
         "alpha_prefill": alpha,
@@ -148,16 +168,23 @@ def calibrate(per_hw_df: dict) -> pd.DataFrame:
 
 def filter_outliers(calib_df: pd.DataFrame,
                     alpha_range=(0.005, 1.0),
-                    beta_range=(0.005, 20.0)) -> pd.DataFrame:
+                    beta_range=(0.005, 1.0)) -> pd.DataFrame:
     """Drop rows whose alpha/beta are physically implausible.
-    
-    For beta, we allow up to 20.0 to accommodate massive throughput gains
-     from continuous batching in engines like vLLM.
+
+    Values >1.0 mean our peak-FLOPS / MBW assumption is wrong for that case
+    (e.g. INT4 kernels on H100 use 1248 TFLOPS, not 312, and the row's α
+    breaks the limit; or the row's decode_tps was an aggregate across many
+    concurrent requests — a calibration math bug, not a physical signal).
+    Values <0.005 mean the model didn't actually fit — observed time was
+    dominated by paging.
+
+    NaN α or β passes through (used for vLLM rows where one of the two is
+    deliberately not solvable from single-batch data — downstream aggregation
+    just skips NaN cells in the median).
     """
-    mask = calib_df["beta_decode"].between(*beta_range)
-    # alpha can be NaN if prefill wasn't identifiable
-    alpha_mask = calib_df["alpha_prefill"].isna() | calib_df["alpha_prefill"].between(*alpha_range)
-    return calib_df[mask & alpha_mask].copy()
+    alpha_ok = calib_df["alpha_prefill"].isna() | calib_df["alpha_prefill"].between(*alpha_range)
+    beta_ok  = calib_df["beta_decode"].isna()  | calib_df["beta_decode"].between(*beta_range)
+    return calib_df[alpha_ok & beta_ok].copy()
 
 
 def aggregate(calib_df: pd.DataFrame, by=None) -> pd.DataFrame:
