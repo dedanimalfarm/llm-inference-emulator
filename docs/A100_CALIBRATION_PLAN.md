@@ -20,15 +20,16 @@
 
 ## Выбор шаблонов на cloud
 
-Из стандартного списка Vast.ai / RunPod / Lambda нам нужны эти и
-**только эти** шаблоны:
+**Важно**: на Vast.ai шаблон `vLLM` доступен только для серверного B200
+(Blackwell). Для A100 vLLM устанавливается вручную из шаблона
+`NVIDIA CUDA` — это стандартный workflow и занимает 5 минут
+(`pip install vllm` + кэш моделей).
 
 | Шаблон | Phase | Зачем |
 |---|---|---|
-| **vLLM** | 1, 2 | главный движок; vLLM + FlashAttention + Marlin AWQ уже preinstalled |
-| **HuggingFace TGI API** | 3 (опц.) | второй движок на том же железе → cross-validation «hw vs engine» |
-| **SGLang** | 3 (опц.) | третий движок, RadixAttention; покрытие агентных сценариев |
-| **NVIDIA CUDA** | 4 (опц.) | bare Ubuntu+CUDA; нужен для TensorRT-LLM (нет готового шаблона) |
+| **NVIDIA CUDA** | **1, 2, (3, 4)** | bare Ubuntu + CUDA toolkit; ставим vLLM / TGI / SGLang / TRT-LLM вручную через pip / Docker |
+| **HuggingFace TGI API** | 3 (опц.) | если предпочесть preinstalled TGI, есть готовый шаблон |
+| **SGLang** | 3 (опц.) | если предпочесть preinstalled SGLang |
 | **Llama.cpp** | опц. | cross-check нашей RTX-3090 калибровки на A100 |
 
 Шаблоны, **не нужные** для калибровки inference:
@@ -40,6 +41,32 @@
 - Прочее (RAPIDS, TensorFlow CUDA, Hashcat, Pixel Streaming, Pinokio,
   Linux Desktop, Ubuntu VM, PyTorch NGC) — не наш сценарий
 
+### Setup vLLM на bare CUDA (один раз в начале сессии)
+
+```bash
+# Шаблон NVIDIA CUDA приходит с CUDA toolkit, но без Python ML stack.
+# Ставим:
+pip install --upgrade pip
+pip install "vllm>=0.9.0"
+
+# Проверка:
+python3 -c "import vllm; print(vllm.__version__)"
+# Должно напечатать что-то вроде 0.9.x
+
+# Зафиксировать версию для воспроизводимости:
+pip show vllm | grep Version > ~/vllm_version.txt
+
+# Кэш моделей на быстрый диск (workspace обычно ~200 GB SSD):
+export HF_HOME=/workspace/hf_cache
+mkdir -p $HF_HOME
+
+# A100 — Ampere; vLLM V1 scheduler полностью стабилен.
+# На Blackwell нужен был VLLM_USE_V1=0, здесь НЕ нужен.
+```
+
+Полный setup ~5 минут (vLLM 1.5 GB, скачивание моделей в отдельной
+строчке ниже).
+
 ## Phase 1 — vLLM single-GPU calibration (priority #1)
 
 **Цель:** закрыть main calibration gap «vLLM на A100». Получить
@@ -49,23 +76,12 @@
 **Hardware:** 1× A100 80GB (PCIe или SXM — обе пойдут; SXM
 предпочтительнее для согласованности с literature).
 
-**Шаблон:** `vLLM` (Vast.ai).
-
-**Setup** (адаптировано из `MANUAL_BENCHMARK.md`):
+**Шаблон:** `NVIDIA CUDA` (bare). vLLM ставится вручную — см. раздел
+«Setup vLLM на bare CUDA» выше.
 
 ```bash
-# vLLM из шаблона уже установлен (обычно >= 0.6.x).
-# Зафиксировать версию для воспроизводимости:
-pip show vllm | grep Version > ~/vllm_version.txt
-
-# Кэш на быстром диске
-export HF_HOME=/workspace/hf_cache
-
-# vLLM v1 на A100 стабилен — оставить включённым (не как на Blackwell)
-# (no need for VLLM_USE_V1=0)
-
-# Ограничить ядра для предсказуемости
-export OMP_NUM_THREADS=8
+# Дополнительно (помимо общего setup из раздела выше):
+export OMP_NUM_THREADS=8   # предсказуемость на CPU-стороне
 ```
 
 **Bench-команды** (батч-свип для каждой модели):
@@ -125,7 +141,7 @@ done
 
 **Hardware:** 2× A100 80GB (NVLink желательно — для real TP).
 
-**Шаблон:** `vLLM` (тот же).
+**Шаблон:** `NVIDIA CUDA` (тот же, что Phase 1; vLLM уже установлен).
 
 **Bench-команды:**
 
