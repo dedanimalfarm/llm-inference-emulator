@@ -263,6 +263,110 @@ def test_engine_defaults_kv_packing_eff_wired():
     assert run("vllm").memory_gb < run("pytorch").memory_gb
 
 
+def test_moe_uses_active_params_for_flops_not_total():
+    """MoE: compute time scales with n_active_b, not n_params_b.
+    Same total size, half active → ~half the compute-bound time."""
+    common = dict(
+        bits=16, p_in=2048, p_out=64, batch=1,
+        peak_flops=get_peak_compute("1xA100", 16),
+        mem_bw=get_memory_bandwidth("1xA100"),
+        alpha=0.30, beta=0.70,
+        layers=80, d_model=8192, kv_heads=8,  # explicit, bypass ARCH_DEFAULTS
+    )
+    dense = predict(n_params_b=70, n_active_b=70, **common)
+    moe   = predict(n_params_b=70, n_active_b=35, **common)
+    # Prefill on 2048 tokens is compute-bound at this size; halving active
+    # FLOPS should roughly halve prefill time.
+    assert moe.prefill_s < dense.prefill_s
+    ratio = moe.prefill_s / dense.prefill_s
+    assert 0.45 < ratio < 0.55, f"expected ~0.5 prefill ratio, got {ratio:.3f}"
+
+
+def test_moe_memory_uses_total_params_not_active():
+    """MoE: weight memory uses n_params_b (all experts in VRAM)."""
+    common = dict(
+        bits=16, p_in=256, p_out=64, batch=1,
+        peak_flops=get_peak_compute("1xA100", 16),
+        mem_bw=get_memory_bandwidth("1xA100"),
+        alpha=0.30, beta=0.70,
+        layers=32, d_model=4096, kv_heads=8,
+    )
+    dense = predict(n_params_b=46.7, n_active_b=46.7, **common)
+    moe   = predict(n_params_b=46.7, n_active_b=12.9, **common)  # Mixtral 8x7B
+    # Same total → same memory_gb (KV identical, weights identical).
+    assert abs(dense.memory_gb - moe.memory_gb) < 1e-6
+
+
+def test_arch_defaults_moe_entries_consistent():
+    """Every MoE entry in ARCH_DEFAULTS must declare n_active_b strictly less
+    than its key (total size). Sanity-check the table itself."""
+    from emulator.formula import ARCH_DEFAULTS
+    moe_keys = [k for k, v in ARCH_DEFAULTS.items() if "n_active_b" in v]
+    assert moe_keys, "no MoE entries in ARCH_DEFAULTS"
+    for k in moe_keys:
+        v = ARCH_DEFAULTS[k]
+        active = v["n_active_b"]
+        assert 0 < active < k, (
+            f"MoE entry {k}B has n_active_b={active}B; "
+            f"must be in (0, {k})"
+        )
+
+
+def test_head_dim_override_inflates_kv_cache():
+    """DeepSeek MLA models override head_dim from 128 to 512.
+    KV cache must scale linearly with head_dim."""
+    common = dict(
+        n_params_b=70, bits=16, p_in=4096, p_out=64, batch=1,
+        peak_flops=get_peak_compute("1xA100", 16),
+        mem_bw=get_memory_bandwidth("1xA100"),
+        alpha=0.30, beta=0.70,
+        layers=61, d_model=7168, kv_heads=1,
+    )
+    default_hd = predict(head_dim=128, **common)
+    mla_like   = predict(head_dim=512, **common)
+    # The KV portion of memory_gb scales 4× with head_dim. Weights identical.
+    # Compute KV-only delta:
+    w_gb = 70 * 16 / 8  # weights in GB (no division by 1e9 since N is in B already)
+    # Actually formula uses W = N * bits / 8 with N in raw count, but memory_gb
+    # already divides by 1e9, so weights = 70e9 * 16 / 8 / 1e9 = 140 GB.
+    kv_default = default_hd.memory_gb - 140
+    kv_mla     = mla_like.memory_gb - 140
+    assert abs(kv_mla / kv_default - 4.0) < 0.001
+
+
+def test_deepseek_v4_pro_arch_loaded_from_defaults():
+    """Calling predict() for DeepSeek V4-Pro (size 1600) should pick up
+    n_active_b=49, head_dim=512 from ARCH_DEFAULTS automatically."""
+    common = dict(
+        n_params_b=1600.0, bits=4, p_in=1024, p_out=64, batch=1,
+        peak_flops=get_peak_compute("1xA100", 16),
+        mem_bw=get_memory_bandwidth("1xA100"),
+        alpha=0.30, beta=0.70,
+    )
+    # Explicit MoE/head_dim
+    explicit = predict(n_active_b=49.0, head_dim=512, **common)
+    # From ARCH_DEFAULTS
+    from_defaults = predict(**common)
+    assert abs(explicit.prefill_s - from_defaults.prefill_s) < 1e-9
+    assert abs(explicit.memory_gb - from_defaults.memory_gb) < 1e-9
+
+
+def test_n_active_b_validates_against_n_params_b():
+    """Active params cannot exceed total params."""
+    common = dict(
+        bits=16, p_in=256, p_out=64, batch=1,
+        peak_flops=get_peak_compute("1xA100", 16),
+        mem_bw=get_memory_bandwidth("1xA100"),
+        alpha=0.30, beta=0.70,
+        layers=32, d_model=4096, kv_heads=8,
+    )
+    try:
+        predict(n_params_b=7, n_active_b=10, **common)
+        assert False, "should have raised ValueError"
+    except ValueError as e:
+        assert "n_active_b" in str(e)
+
+
 def test_defaults_preserve_legacy_behavior():
     """A call with no vLLM-style kwargs must produce the same result as
     pre-vLLM code. This locks the back-compat contract."""
@@ -300,5 +404,11 @@ if __name__ == "__main__":
     test_batch_saturation_50pct_midpoint()
     test_kv_packing_eff_inflates_memory_for_naive_allocator()
     test_engine_defaults_kv_packing_eff_wired()
+    test_moe_uses_active_params_for_flops_not_total()
+    test_moe_memory_uses_total_params_not_active()
+    test_arch_defaults_moe_entries_consistent()
+    test_head_dim_override_inflates_kv_cache()
+    test_deepseek_v4_pro_arch_loaded_from_defaults()
+    test_n_active_b_validates_against_n_params_b()
     test_defaults_preserve_legacy_behavior()
     print("all tests passed")

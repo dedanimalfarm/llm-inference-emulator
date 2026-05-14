@@ -49,6 +49,12 @@ def main():
     p.add_argument("--cost-per-hour", type=float, default=None,
                    help="GPU rental cost in $/hour (e.g. 1.50 for A100 on RunPod); "
                         "if set, prints $/M tokens alongside throughput")
+    p.add_argument("--active", type=float, default=None,
+                   help="MoE: active params per token in billions (overrides ARCH_DEFAULTS). "
+                        "FLOPS use this value; memory still uses --model.")
+    p.add_argument("--head-dim", type=int, default=None,
+                   help="KV head dimension (default 128; use 512 for MLA models "
+                        "like DeepSeek V3/V4).")
     args = p.parse_args()
 
     eng = ENGINE_DEFAULTS[args.engine]
@@ -86,9 +92,16 @@ def main():
         kv_bits_k=args.kv_bits_k, kv_bits_v=args.kv_bits_v,
         tp_size=HARDWARE_SPECS[args.hw].get("tp_size", 1),
         tp_efficiency=HARDWARE_SPECS[args.hw].get("tp_efficiency", 1.0),
+        n_active_b=args.active,
+        head_dim=args.head_dim,
     )
 
-    print(f"\n{args.hw} | {args.engine} | {args.bits}-bit | {args.model}B params | bs={args.batch}")
+    # MoE: figure out the effective active count for the printout (CLI override > ARCH_DEFAULTS > dense).
+    from emulator.formula import _arch_for
+    arch_lookup = _arch_for(args.model)
+    active_b = args.active if args.active is not None else arch_lookup.get("n_active_b", args.model)
+    moe_tag = f" | active={active_b}B" if active_b != args.model else ""
+    print(f"\n{args.hw} | {args.engine} | {args.bits}-bit | {args.model}B params{moe_tag} | bs={args.batch}")
     print(f"  alpha={alpha:.3f}, beta={beta:.3f}, batch_saturation={eng['batch_saturation']}, kv_packing_eff={eng['kv_packing_eff']}")
     print(f"  prefill          : {res.prefill_s*1000:.1f} ms ({res.bottleneck_prefill}-bound)")
     print(f"  decode/token     : {res.decode_per_token_s*1000:.2f} ms ({res.bottleneck_decode}-bound)")

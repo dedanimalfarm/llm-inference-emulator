@@ -58,9 +58,19 @@ where:
 ```bash
 pip install -r requirements.txt
 
-# emulate a single configuration
+# dense model: emulate one configuration
 python scripts/cli.py --model 7 --bits 4 --hw 1xA100 --engine vllm \
                      --batch 8 --precision-label GPTQ.4bit
+
+# MoE model: total params + active params per token are picked up
+# automatically from ARCH_DEFAULTS (Mixtral 8x7B/8x22B, Qwen3-235B-A22B,
+# DeepSeek-V3, DeepSeek-V4-Pro/Flash)
+python scripts/cli.py --model 46.7 --bits 4 --hw 1xA100 --engine vllm  # Mixtral 8x7B
+python scripts/cli.py --model 1600 --bits 4 --hw 1xA100 --engine vllm  # DeepSeek-V4-Pro
+
+# or override explicitly for a custom MoE / MLA model:
+python scripts/cli.py --model 100 --active 15 --head-dim 512 --bits 4 \
+                     --hw 1xA100 --engine vllm
 
 # show a comparison grid across engines / hardware
 python scripts/demo.py
