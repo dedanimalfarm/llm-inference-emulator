@@ -169,9 +169,19 @@ known *before* the launch meeting, not after.
 
 ### 5. Cost per million tokens
 
-Plug in your cloud price list and divide:
+Pass your hourly GPU price via `--cost-per-hour` and the CLI prints
+`$ per million tokens` directly:
 
-```python
+```bash
+$ python scripts/cli.py --model 7 --bits 16 --hw 1xA100 --engine vllm \
+        --batch 8 --cost-per-hour 4.10
+  throughput       : 4322 tok/s
+  cost @ $4.1/hr   : $0.264 per million tokens
+```
+
+Comparing across hardware:
+
+```
 # decode-only, single-stream, 7B FP16 vLLM
                     tok/s     $/hr      $/M tokens
 1xT4   (g4dn.xl)    636      0.526         0.23

@@ -46,6 +46,9 @@ def main():
                    help="bits per element for K-cache (e.g. 8 for Q8_0, 4 for Q4_0)")
     p.add_argument("--kv-bits-v", type=float, default=16,
                    help="bits per element for V-cache")
+    p.add_argument("--cost-per-hour", type=float, default=None,
+                   help="GPU rental cost in $/hour (e.g. 1.50 for A100 on RunPod); "
+                        "if set, prints $/M tokens alongside throughput")
     args = p.parse_args()
 
     eng = ENGINE_DEFAULTS[args.engine]
@@ -91,6 +94,9 @@ def main():
     print(f"  decode/token     : {res.decode_per_token_s*1000:.2f} ms ({res.bottleneck_decode}-bound)")
     print(f"  total latency    : {res.total_latency_s:.3f} s for {args.p_out} new tokens")
     print(f"  throughput       : {res.throughput_tok_s:.1f} tok/s")
+    if args.cost_per_hour is not None:
+        cost_per_million = args.cost_per_hour * 1e6 / (res.throughput_tok_s * 3600)
+        print(f"  cost @ ${args.cost_per_hour:g}/hr : ${cost_per_million:.3f} per million tokens")
     print(f"  approx. memory   : {res.memory_gb:.2f} GB (weights + KV)")
     cap = HARDWARE_SPECS[args.hw]["memory_capacity_gb"]
     if res.memory_gb > cap:
