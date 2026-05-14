@@ -2911,6 +2911,7 @@ practical effect PagedAttention.
 
 ### Куда дальше
 
+- [`docs/FINOPS.md`](FINOPS.md) — математический расчёт окупаемости собственного железа (Capex+Opex) против аренды API (OpenRouter).
 - [`docs/WALKTHROUGH.md`](WALKTHROUGH.md) — формальный пошаговый разбор
   эмулятора с примером расчёта от начала до конца.
 - [`docs/VLLM_OPTIMIZATIONS.md`](VLLM_OPTIMIZATIONS.md) — глубокий
