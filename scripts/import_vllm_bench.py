@@ -48,6 +48,9 @@ def parse_vllm_json(path):
             elif "llama70b" in fname:
                 r["model"] = "hugging-quants/Meta-Llama-3.1-70B-Instruct-AWQ-INT4"
                 r["params_b"] = 70.0
+            elif "llama70b_gptq" in fname:
+                r["model"] = "neuralmagic/Meta-Llama-3.1-70B-Instruct-quantized.w4a16"
+                r["params_b"] = 70.0
         
         if "tp" not in r:
             if "tp1" in fname: r["tp"] = 1
