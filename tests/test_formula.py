@@ -232,6 +232,37 @@ def test_kv_packing_eff_inflates_memory_for_naive_allocator():
     assert base.memory_gb < paged.memory_gb < naive.memory_gb
 
 
+def test_engine_defaults_kv_packing_eff_wired():
+    """Every engine in ENGINE_DEFAULTS must declare kv_packing_eff, and
+    routing the field through predict() must make vLLM (PagedAttention)
+    report lower memory than naive PyTorch in the same scenario. This is
+    the integration check that callers like cli.py / demo.py see the
+    PagedAttention effect without an explicit override."""
+    from emulator.engines import ENGINE_DEFAULTS
+
+    for name, conf in ENGINE_DEFAULTS.items():
+        eff = conf.get("kv_packing_eff")
+        assert eff is not None, f"{name} missing kv_packing_eff"
+        assert 0.0 < eff <= 1.0, f"{name}: kv_packing_eff={eff} out of (0, 1]"
+
+    assert (ENGINE_DEFAULTS["vllm"]["kv_packing_eff"]
+            > ENGINE_DEFAULTS["pytorch"]["kv_packing_eff"])
+
+    common = dict(
+        n_params_b=7, bits=16, p_in=2048, p_out=512, batch=8,
+        peak_flops=get_peak_compute("1xA100", 16),
+        mem_bw=get_memory_bandwidth("1xA100"),
+    )
+
+    def run(name):
+        e = ENGINE_DEFAULTS[name]
+        return predict(alpha=e["alpha"], beta=e["beta"],
+                       kv_packing_eff=e["kv_packing_eff"],
+                       batch_saturation=e["batch_saturation"], **common)
+
+    assert run("vllm").memory_gb < run("pytorch").memory_gb
+
+
 def test_defaults_preserve_legacy_behavior():
     """A call with no vLLM-style kwargs must produce the same result as
     pre-vLLM code. This locks the back-compat contract."""
@@ -268,5 +299,6 @@ if __name__ == "__main__":
     test_batch_saturation_asymptote()
     test_batch_saturation_50pct_midpoint()
     test_kv_packing_eff_inflates_memory_for_naive_allocator()
+    test_engine_defaults_kv_packing_eff_wired()
     test_defaults_preserve_legacy_behavior()
     print("all tests passed")

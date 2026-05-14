@@ -78,6 +78,7 @@ def main():
         mem_bw=get_memory_bandwidth(args.hw),
         alpha=alpha, beta=beta,
         batch_saturation=eng["batch_saturation"],
+        kv_packing_eff=eng["kv_packing_eff"],
         compute_path=compute_bits,
         kv_bits_k=args.kv_bits_k, kv_bits_v=args.kv_bits_v,
         tp_size=HARDWARE_SPECS[args.hw].get("tp_size", 1),
@@ -85,7 +86,7 @@ def main():
     )
 
     print(f"\n{args.hw} | {args.engine} | {args.bits}-bit | {args.model}B params | bs={args.batch}")
-    print(f"  alpha={alpha:.3f}, beta={beta:.3f}, batch_saturation={eng['batch_saturation']}")
+    print(f"  alpha={alpha:.3f}, beta={beta:.3f}, batch_saturation={eng['batch_saturation']}, kv_packing_eff={eng['kv_packing_eff']}")
     print(f"  prefill          : {res.prefill_s*1000:.1f} ms ({res.bottleneck_prefill}-bound)")
     print(f"  decode/token     : {res.decode_per_token_s*1000:.2f} ms ({res.bottleneck_decode}-bound)")
     print(f"  total latency    : {res.total_latency_s:.3f} s for {args.p_out} new tokens")

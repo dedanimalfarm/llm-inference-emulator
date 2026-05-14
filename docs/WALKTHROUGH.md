@@ -735,15 +735,20 @@ Llama-3.1-70B + Llama-3.2-1B / batch=1: ускорение decode в
 kv_total = kv_per_token_bytes * (p_in + p_out) * batch / kv_packing_eff
 ```
 
-При `kv_packing_eff = 1.0` (default) — идеальная упаковка, нет
-оверхеда. При `0.65` — наивная аллокация, реально занятой памяти
+При `kv_packing_eff = 1.0` (default в `predict()`) — идеальная упаковка,
+нет оверхеда. При `0.65` — наивная аллокация, реально занятой памяти
 в ~1.5× больше расчётной.
 
-> ⚠️ **Гетча:** дефолт в `predict()` = `1.0`, и `engines.py` пока
-> **не подкладывает** значения для движков. Из коробки эффект
-> PagedAttention в memory-расчёте не учитывается — передавайте
-> `kv_packing_eff` явно (например, `0.97` для vLLM, `0.65` для
-> наивного PyTorch). См. design doc, секцию 1.
+**Значения по движкам** в `ENGINE_DEFAULTS` (`emulator/engines.py`):
+- `vllm`: 0.97 (PagedAttention)
+- `tensorrt`: 0.92 (paged allocator)
+- `llama.cpp`: 0.85 (ring buffer)
+- `pytorch` / `pytorch+sdpa` / `openvino` / `onnxruntime`: 0.65 (naive contiguous)
+- `triton`: 0.85
+
+`scripts/cli.py` и `scripts/demo.py` подкладывают это значение в
+`predict()` автоматически. Чтобы переопределить — правьте `ENGINE_DEFAULTS`
+или вызывайте `predict()` напрямую с нужным `kv_packing_eff`.
 
 **На скорость не влияет.** Меняет capacity — сколько concurrent
 requests умещается в VRAM. Поэтому косвенно бустит суммарную
@@ -873,8 +878,9 @@ requests умещается в VRAM. Поэтому косвенно бусти�
   **не идентифицируется**: prefill уходит в compute-bound, KV-term
   слишком мал, чтобы отделить β от шума (см. commit 82341a6,
   Variant A).
-- **`kv_packing_eff`** в `engines.py` не выставлен — передавайте
-  явно при сравнении PagedAttention vs наивной аллокации.
+- **`kv_packing_eff`** выставлен per-engine в `ENGINE_DEFAULTS` и
+  автоматически подкладывается через CLI/demo: vllm=0.97, tensorrt=0.92,
+  llama.cpp=0.85, pytorch=0.65 (literature defaults, не калибровано).
 - Все `spec_*` — пользовательский ввод, калибровать нечего.
 
 Полный design doc с обоснованием и Roadmap —

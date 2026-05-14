@@ -36,6 +36,7 @@ def main():
                     mem_bw=get_memory_bandwidth(hw),
                     alpha=eng["alpha"], beta=eng["beta"],
                     batch_saturation=eng["batch_saturation"],
+                    kv_packing_eff=eng["kv_packing_eff"],
                     compute_path=eng.get("compute_path", 16),
                 )
                 mem_cap = {"1xA10": 24, "1xA100": 80, "1xT4": 16, "32vCPU-C7i": 64}[hw]
