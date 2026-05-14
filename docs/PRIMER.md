@@ -2900,6 +2900,9 @@ practical effect PagedAttention.
   корректировки формулы.
 - [`docs/MANUAL_BENCHMARK.md`](MANUAL_BENCHMARK.md) — как запустить
   собственный бенчмарк и откалибровать новый движок.
+- [`docs/BENCHMARK_SOURCES.md`](BENCHMARK_SOURCES.md) — каталог всех
+  использованных источников: данные для калибровки, внешние бенчмарки
+  для валидации, архитектурные refs, методологические ссылки.
 - [`results/REPORT.md`](../results/REPORT.md) — анализ всех
   откалиброванных коэффициентов с графиками predicted vs observed.
 
