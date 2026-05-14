@@ -20,6 +20,13 @@ HARDWARE_SPECS = {
         "memory_capacity_gb": 80.0,
         "tdp_w": 275,
     },
+    "1xA100-40": {
+        # NVIDIA A100 40GB SXM4 — Ampere
+        "peak_tflops": {16: 312.0, 8: 624.0, 4: 624.0},
+        "memory_bandwidth_gbs": 1555.0,
+        "memory_capacity_gb": 40.0,
+        "tdp_w": 400,
+    },
     "1xH100": {
         # NVIDIA H100 SXM5 80GB — Hopper. Dense (no-sparsity) tensor-core
         # peaks: FP16/BF16 989, FP8 1979, INT8 1979 TFLOPS/TOPS. With 2×

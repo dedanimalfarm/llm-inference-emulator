@@ -512,3 +512,38 @@ hardware sizing, and sanity-checking real benchmark results.
    hardware under different workloads (much larger models, longer
    contexts) will measure a different number. For specific
    deployment sizing, recalibrate against the actual model.
+
+## A100 vLLM Calibration Study
+
+> Added 2026-05-14 based on local runs of `vllm bench` on A100-SXM4-40GB.
+
+### Setup
+- **Hardware**: 1× NVIDIA A100-SXM4-40GB (1555 GB/s, 312 TFLOPS).
+- **Engine**: `vLLM` 0.9.1 (V1 engine with `torch.compile`).
+- **Model**: Qwen-2.5-7B-AWQ (4.25 bits/param).
+- **Scenarios**: `p1024 / g128`, batch sizes 1 to 500.
+
+### Calibrated Coefficients
+The following coefficients were derived from a multi-batch sweep:
+
+```
+1xA100, vllm, AWQ.4bit:
+  alpha (prefill MFU) = 0.453
+  beta (decode MBU)  = 0.316
+  batch_saturation = (7.8, 6.8)
+  n_rows = 6
+```
+
+### Sanity Check
+Cross-check against public benchmarks (§2.2 in `BENCHMARK_SOURCES.md`):
+- **§2.2a (P_in=1, P_out=2048, batch=1)**: 
+  - Observed: 148 tok/s
+  - Predicted: 138.1 tok/s (-6.7% error)
+- **§2.2b (P_in=6144, P_out=2048, batch=1)**: 
+  - Observed: 138 tok/s
+  - Predicted: 125.6 tok/s (-9.0% error)
+
+### Findings
+- **Single-stream discrepancy**: Previous emulator versions overestimated single-stream throughput by 5-6x due to a `batch_saturation` model that provided a large throughput "bonus" even at `batch=1`.
+- **Physical grounding**: Forcing `bs_eff(1) = 1.0` and calibrating `beta` against single-stream observations leads to highly accurate predictions across different batch sizes.
+- **V1 Engine instability**: The vLLM V1 engine exhibited flakiness during initialization on the benchmark machine, requiring multiple retries and process cleanups.

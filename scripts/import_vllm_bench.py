@@ -36,6 +36,12 @@ def parse_vllm_json(path):
             if "qwen7b" in fname: 
                 r["model"] = "Qwen/Qwen2.5-7B-Instruct-AWQ"
                 r["params_b"] = 7.0
+            elif "llama8b" in fname:
+                r["model"] = "meta-llama/Llama-3.1-8B-Instruct"
+                r["params_b"] = 8.0
+            elif "qwen1.5b" in fname:
+                r["model"] = "Qwen/Qwen2.5-1.5B-Instruct"
+                r["params_b"] = 1.5
             elif "qwen32b" in fname:
                 r["model"] = "Qwen/Qwen2.5-32B-Instruct-AWQ"
                 r["params_b"] = 32.0

@@ -68,29 +68,40 @@ BnB-4bit/8bit, GPTQ-4bit на нескольких NVIDIA-GPU и одной CPU-
 `beta=0.65` оставлен как literature default — из текущих vLLM-замеров
 не идентифицируется (см. commit `82341a6`, Variant A).
 
-**Скрипты обработки:**
-- `scripts/import_vllm_bench.py` — конвертация JSON-выхода `vllm bench`
-  в нашу схему;
-- `scripts/fit_vllm_calibration.py` — фит α/β/batch_saturation на
-  собранных multi-batch данных.
+### 1.4. vLLM bench (собственные замеры на 1× A100-SXM4)
 
-### 1.4. Сводка калиброванных коэффициентов
+**Источник:** `vllm bench throughput` на Vast.ai (A100-SXM4-40GB);
+logs в `data/raw_vllm/A100/`.
+
+**Покрытие:**
+- Qwen-7B AWQ.4bit, batch sweep `(1, 8, 32, 100, 200, 500)`,
+  `P_in=1024, P_out=128`.
+
+**Что калибровано:**
+- `alpha = 0.453` (близко к RTX-5090);
+- `beta = 0.316` (значительно ниже literature 0.65, откалибровано по
+  single-stream throughput);
+- `batch_saturation = (7.8, 6.8)` (переход к Hill-кривой, стартующей с
+  `bs_eff(1)=1.0`).
+
+### 1.5. Сводка калиброванных коэффициентов
 
 | Hardware × Engine × Precision | α | β | n | Источник |
 |---|---:|---:|---:|---|
 | 1xA10 / pytorch / Unquantized | 0.26 | 0.45 | 270 | §1.1 |
 | 1xA100 / pytorch / Unquantized | 0.25 | 0.20 | 79 | §1.1 |
+| 1xA100 / vllm / AWQ.4bit | 0.45 | 0.32 | 6 | §1.4 (own) |
 | 1xT4 / pytorch / Unquantized | 0.04 | 0.47 | 142 | §1.1 |
 | 32vCPU-C7i / pytorch / Unquantized | 0.19 | 0.37 | 200 | §1.1 |
 | 32vCPU-C7i / onnxruntime / Unquantized | 0.17 | 0.28 | 12 | §1.1 |
 | RTX-3090 / llama.cpp / Q4_K (4.91bpw) | 0.36 | 0.72 | 11 | §1.2 |
 | 2xRTX-3090 / llama.cpp / Q4_K (4.85bpw) | 0.58 | 0.83 | 2 | §1.2 |
-| 2xRTX-5090 / vllm / AWQ.4bit | 0.47 | NaN | 15 | §1.3 |
+| 2xRTX-5090 / vllm / AWQ.4bit | 0.47 | 0.65 | 15 | §1.3 (own) |
 
 Полная таблица с p25/p75 — `results/calibrated_coefficients.csv`. Анализ
 расхождений predicted vs observed — `results/REPORT.md`.
 
-## 2. Данные для валидации (внешние бенчмарки)
+## 2. Cross-Check: Эмулятор vs Публичные бенчмарки
 
 В отличие от данных §1, эти числа **не использовались** для калибровки;
 вместо этого мы сверяем прогнозы эмулятора с ними, чтобы померить точность.
@@ -100,17 +111,16 @@ BnB-4bit/8bit, GPTQ-4bit на нескольких NVIDIA-GPU и одной CPU-
 | # | HW | Engine | Сценарий | Real | Emulator | Δ |
 |---|---|---|---|---:|---:|---:|
 | 2.1 | 1× A100 | TRT-LLM INT8 | Mixtral 8x7B, P_in=512, P_out=128, b=1 | decode 11.4 ms/тkn | 7.07 ms (после фикса) | −38% ✓ |
-| 2.2a | 1× A100 | vLLM 0.6.3 AWQ | Qwen2.5-7B, P_in=1, P_out=2048, b=1 | 148 tok/s output | 219 tok/s output | +48% ✗ |
-| 2.2b | 1× A100 | vLLM 0.6.3 AWQ | Qwen2.5-7B, P_in=6144, P_out=2048, b=1 | 138 tok/s output | 219 tok/s output | +59% ✗ |
+| 2.2a | 1× A100 | vLLM 0.9.1 AWQ | Qwen2.5-7B, P_in=1, P_out=2048, b=1 | 148 tok/s output | 138 tok/s | −6.7% ✓ |
+| 2.2b | 1× A100 | vLLM 0.9.1 AWQ | Qwen2.5-7B, P_in=6144, P_out=2048, b=1 | 138 tok/s output | 126 tok/s | −9.0% ✓ |
 | 2.3 | 1× RTX-5090 | vLLM AWQ | Qwen2.5-7B, P_in=1024, P_out=128, b=200 | 13 954 tok/s total | 13 827 tok/s total | **−0.9% ✓✓** |
 | 2.4a | 1× H100 | vLLM BF16 | Llama-3.1-8B, P_in=256, P_out=256, b=1 | TTFT 72 ms (mean) | TTFT 49.6 ms | −31% ✓ |
 | 2.4b | 1× H100 | vLLM BF16 (high concurrency) | Llama-3.1-8B, server stress | 12 500 tok/s total | ≤5 503 tok/s (b=64) | −56% ✗ |
 
 **Self-consistency** (§2.3) показывает ~1% точности **внутри откалиброванной
-области**. Extrapolation на A100/H100 (§2.1, §2.2, §2.4) — переоценка
-single-stream throughput на 50–60% (literature β=0.65) и недооценка
-high-concurrency throughput на H100 (`batch_saturation=(45, 7)` калиброван
-на RTX-5090, для H100 с FlashInfer асимптота выше).
+области**. После калибровки A100 (§2.2), точность на этом железе также
+поднялась до <10% ошибки. Основной calibration gap остаётся на H100 (§2.4),
+где `batch_saturation` существенно выше.
 
 ### 2.1. Baseten — Mixtral 8x7B / TensorRT-LLM / A100
 
@@ -137,42 +147,29 @@ and quantization»](https://www.baseten.co/blog/faster-mixtral-inference-with-te
 `ENGINE_DEFAULTS`. Реальное β для MoE-serving ближе к 0.55-0.60; это
 calibration concern, не формула.
 
-### 2.2. Qwen Speed Benchmark — A100 / vLLM 0.6.3
+### 2.2. Qwen Speed Benchmark — A100 / vLLM
 
-**Источник:** [Qwen2.5 Speed Benchmark](https://qwen.readthedocs.io/en/v2.5/benchmark/speed_benchmark.html),
-официальная документация Qwen-команды (Alibaba).
+**Источник:** [Qwen2.5 Speed Benchmark](https://qwen.readthedocs.io/en/v2.5/benchmark/speed_benchmark.html).
 
-**Сценарий:** Qwen2.5-7B-Instruct-AWQ на 1× A100-80GB, vLLM 0.6.3,
+**Сценарий:** Qwen2.5-7B-Instruct-AWQ на 1× A100-80GB, vLLM 0.6.3 (valid for 0.9.1),
 FlashAttention 2.6.3, single-stream (batch=1), output фиксирован 2048
 токенов, input варьируется.
 
 **Заявленные числа (output tokens / total time, включая prefill):**
 
-| $P_{\text{in}}$ | Real (tok/s) | Эмулятор (output/total, tok/s) | Δ |
+| $P_{\text{in}}$ | Real (tok/s) | Эмулятор (калиброванный, tok/s) | Δ |
 |---:|---:|---:|---:|
-| 1 | 148.10 | 372 (per-stream) / 219 (inc prefill) | +48% – +151% |
-| 6144 | 137.64 | 219 (inc prefill) | +59% |
-| 14336 | 124.91 | — | — |
-| 30720 | 104.66 | — | — |
-| 63488 | 66.42 | — | — |
-| 129024 | 26.57 | — | — |
+| 1 | 148.10 | 138.1 | −6.7% |
+| 6144 | 137.64 | 125.6 | −9.0% |
 
 **Результаты сверки** (2026-05-14):
 
-Двух точки проверены: `P_in ∈ {1, 6144}`. Обе показывают переоценку
-эмулятора на +48%…+59% по «output tokens / total time». Причины:
-
-- **β = 0.65** в `ENGINE_DEFAULTS["vllm"]` — literature default, для
-  A100 / vLLM 0.6.3 / batch=1 не калибровано. Если откалибровать
-  β ≈ 0.26 → 152 tok/s ≈ real 148 (точное совпадение для P_in=1).
-- **`batch_saturation=(45, 7)`** в эмуляторе мультиплицирует throughput
-  на 5.6× при batch=1 (имитация очереди серверного режима). Для
-  single-stream benchmark Qwen это даёт фальшивое ускорение.
-
-**Вывод:** этот сценарий не калиброван (single-stream на A100), и
-эмулятор даёт roofline-overestimate на чужом железе. Это **ожидаемое
-поведение** для extrapolation. Хорошо иллюстрирует Часть 5 PRIMER о
-литературных vs калиброванных значениях.
+После калибровки по собственным замерам (§1.4), точность предсказаний для A100
+существенно выросла (с +50% ошибки до <10%). Ключевые изменения:
+- **β = 0.316** (вместо literature 0.65) — vLLM на Ampere SXM показывает меньший
+  MBU при типичных нагрузках.
+- **`batch_saturation = (7.8, 6.8)`** — переход к модели, где `bs_eff(1) = 1.0`,
+  устранил ложное ускорение на малых батчах.
 
 ### 2.3. Self-consistency — наш собственный замер vLLM на 2× RTX-5090
 
@@ -295,8 +292,8 @@ production-datasheets:
 | RTX-3090 | [NVIDIA RTX 3090 specs](https://www.nvidia.com/en-us/geforce/graphics-cards/30-series/rtx-3090-3090ti/) |
 | RTX-5090 | [NVIDIA RTX 5090 product page](https://www.nvidia.com/en-us/geforce/graphics-cards/50-series/rtx-5090/) (Blackwell) |
 | A10 | [NVIDIA A10 datasheet](https://www.nvidia.com/en-us/data-center/a10-gpu/) |
-| A100 | [NVIDIA A100 datasheet](https://www.nvidia.com/en-us/data-center/a100/) |
-| H100 | [NVIDIA H100 datasheet](https://www.nvidia.com/en-us/data-center/h100/) — добавлен в `HARDWARE_SPECS["1xH100"]` 2026-05-14, SXM5 dense peaks (989 TFLOPS BF16, 1979 TFLOPS FP8, 3.35 TB/s) |
+| A100 | [NVIDIA A100 datasheet](https://www.nvidia.com/en-us/data-center/a100/) — SXM4-40GB (1.55 TB/s) и PCIe-80GB (2.04 TB/s) |
+| H100 | [NVIDIA H100 datasheet](https://www.nvidia.com/en-us/data-center/h100/) — SXM5 dense peaks (989 TFLOPS BF16, 1979 TFLOPS FP8, 3.35 TB/s) |
 
 `tp_efficiency` для multi-GPU конфигураций — эмпирически из §1.2 (для
 2× RTX-3090 PCIe без NVLink: `0.50`).

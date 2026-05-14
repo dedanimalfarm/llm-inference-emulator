@@ -21,14 +21,21 @@ CAL_PATH = os.path.join(os.path.dirname(__file__), "..", "results", "calibrated_
 
 def get_calibrated(hw, engine, precision_label):
     if not os.path.exists(CAL_PATH):
-        return None, None
+        return None, None, None
     cal = pd.read_csv(CAL_PATH)
     sub = cal[(cal["hw"] == hw) & (cal["backend"] == engine)
               & (cal["precision_label"] == precision_label)]
     if sub.empty:
-        return None, None
+        return None, None, None
     r = sub.iloc[0]
-    return float(r["alpha_median"]), float(r["beta_median"])
+    alpha = float(r["alpha_median"])
+    beta = float(r["beta_median"])
+    
+    batch_sat = None
+    if "batch_max" in r and not pd.isna(r["batch_max"]):
+        batch_sat = (float(r["batch_max"]), float(r["batch_50pct"]))
+    
+    return alpha, beta, batch_sat
 
 
 def main():
@@ -63,17 +70,22 @@ def main():
 
     eng = ENGINE_DEFAULTS[args.engine]
     alpha, beta = eng["alpha"], eng["beta"]
+    batch_saturation = eng["batch_saturation"]
     sources = []
     if args.precision_label:
-        a_cal, b_cal = get_calibrated(args.hw, args.engine, args.precision_label)
+        a_cal, b_cal, bs_cal = get_calibrated(args.hw, args.engine, args.precision_label)
         if a_cal is not None and a_cal == a_cal:
             alpha = a_cal
-            sources.append("α=calibrated")
+            sources.append("alpha=calibrated")
         if b_cal is not None and b_cal == b_cal:
             beta = b_cal
-            sources.append("β=calibrated")
+            sources.append("beta=calibrated")
         else:
-            sources.append("β=engine-default (unidentifiable from current data)")
+            sources.append("beta=engine-default (unidentifiable from current data)")
+        if bs_cal is not None:
+            batch_saturation = bs_cal
+            sources.append("batch_saturation=calibrated")
+            
     if sources:
         print(f"# {', '.join(sources)} for ({args.hw}, {args.engine}, {args.precision_label})")
     else:
@@ -90,7 +102,7 @@ def main():
         peak_flops=get_peak_compute(args.hw, compute_bits),
         mem_bw=get_memory_bandwidth(args.hw),
         alpha=alpha, beta=beta,
-        batch_saturation=eng["batch_saturation"],
+        batch_saturation=batch_saturation,
         kv_packing_eff=eng["kv_packing_eff"],
         compute_path=compute_bits,
         kv_bits_k=args.kv_bits_k, kv_bits_v=args.kv_bits_v,
@@ -107,7 +119,7 @@ def main():
     active_b = args.active if args.active is not None else arch_lookup.get("n_active_b", args.model)
     moe_tag = f" | active={active_b}B" if active_b != args.model else ""
     print(f"\n{args.hw} | {args.engine} | {args.bits}-bit | {args.model}B params{moe_tag} | bs={args.batch}")
-    print(f"  alpha={alpha:.3f}, beta={beta:.3f}, batch_saturation={eng['batch_saturation']}, kv_packing_eff={eng['kv_packing_eff']}")
+    print(f"  alpha={alpha:.3f}, beta={beta:.3f}, batch_saturation={batch_saturation}, kv_packing_eff={eng['kv_packing_eff']}")
     print(f"  prefill          : {res.prefill_s*1000:.1f} ms ({res.bottleneck_prefill}-bound)")
     print(f"  decode/token     : {res.decode_per_token_s*1000:.2f} ms ({res.bottleneck_decode}-bound)")
     print(f"  total latency    : {res.total_latency_s:.3f} s for {args.p_out} new tokens")
