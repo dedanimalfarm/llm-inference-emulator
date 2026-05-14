@@ -4,17 +4,47 @@
 
 Давайте применим нашу roofline-модель и актуальные цены на API (например, с агрегатора OpenRouter) и облачные GPU, чтобы рассчитать экономику математически и разобрать реальные бизнес-сценарии.
 
-## 1. Базовые расценки (Начало 2025)
+## 1. Базовые расценки (Май 2026)
 
-Цены на open-source модели переживают «гонку на дно». Провайдеры (Groq, Together, DeepSeek) субсидируют инференс, работая на гигантских масштабах. Типичные цены за 1 миллион токенов (среднее между prefill и decode):
-*   **Класс 8B** (Llama-3.1-8B): ~**$0.05** за 1M токенов.
-*   **Класс 70B** (Llama-3.1-70B): ~**$0.40** за 1M токенов.
-*   **Класс 400B+** (Llama-3.1-405B): ~**$3.00** за 1M токенов.
+Цены на open-source модели переживают «гонку на дно». Провайдеры
+(Groq, Together, DeepSeek, Cerebras) субсидируют инференс, работая на
+гигантских масштабах. С 2025 года цены упали ещё в 2-3×.
 
-Аренда GPU (serverless / почасовая, например RunPod, Lambda Labs):
-*   **1× RTX 3090 / RTX 4090**: ~$0.40 в час.
-*   **1× A100 80GB**: ~$1.50 в час.
-*   **8× H100**: ~$25.00 в час.
+**Open-source через API (input / output, среднее $/M токенов):**
+
+| Класс / модель | Input | Output | Среднее | Примечание |
+|---|---:|---:|---:|---|
+| Llama-3.1-8B | $0.03 | $0.06 | ~$0.05 | base level |
+| Llama-3.3-70B | $0.10 | $0.32 | ~$0.20 | заменил 3.1-70B |
+| Mixtral 8x22B | ~$0.65 | ~$0.65 | ~$0.65 | MoE active 39B |
+| Qwen 2.5-72B | $0.13 | $0.40 | ~$0.27 | |
+| DeepSeek-V3 | $0.32 | $0.89 | ~$0.60 | MoE 671B/37B active |
+| DeepSeek-V4-Flash | $0.14 | ~$0.27 | ~$0.20 | MoE 284B/13B + cache 98% off |
+| DeepSeek-V4-Pro | $1.74 | ~$3.50 | ~$2.50 | MoE 1.6T/49B active |
+
+**Frontier proprietary (input / output):**
+
+| Модель | Input | Output | Cached input |
+|---|---:|---:|---:|
+| Claude Sonnet 4.6 | $3 | $15 | $0.30 |
+| Claude Opus 4.6 / 4.7 | $5 | $25 | $0.50 |
+| GPT-5.4 | $2.50 | $15 | $0.25 |
+| GPT-5.5 | $5 | $30 | $0.50 |
+
+**Аренда GPU (on-demand, май 2026):**
+
+| GPU | Vast.ai | RunPod | AWS on-demand |
+|---|---:|---:|---:|
+| RTX-3090 / 4090 | $0.15-0.30/hr | $0.34/hr | — |
+| RTX-5090 (Blackwell consumer) | $0.50-0.80/hr | $0.69-0.89/hr | — |
+| A100 80GB | $0.67/hr | $0.79/hr | $4.10/hr (p4d/8) |
+| H100 80GB | $1.80-2.50/hr | $2.01-2.69/hr | $4.40/hr (p5/8) |
+| B200 180GB (Blackwell server) | $2.50-3.50/hr | $4.99/hr ($2.12 spot) | $8/hr+ |
+| 8× H100 (full node) | $14-20/hr | $16-22/hr | $35/hr (p5) |
+
+Заметка: marketplace-провайдеры (Vast.ai, Spheron) дешевле on-demand
+hyperscalers в 3-5×, но без SLA — для production нужны Reserved/Spot
+hybrid (см. §3).
 
 ---
 
@@ -31,9 +61,9 @@
 > *Золотое правило от a16z ([«Navigating the High Cost of AI Compute»](https://a16z.com/navigating-the-high-cost-of-ai-compute/)):* Начинайте с API, чтобы найти product-market fit. Переходите на собственное железо/Cloud GPU только для тех задач, которые генерируют основной объем токенов (обычно порог рентабельности начинается от 10+ млн токенов в месяц).
 
 **Математика (Сценарий Исследователя):**
-Исследователь или небольшая команда анализирует документы с помощью **Llama-3.1-70B**. 
+Исследователь или небольшая команда анализирует документы с помощью **Llama-3.3-70B**.
 Нагрузка: 50,000 токенов промптов и 10,000 токенов ответов каждый день. Итого ~1.8 миллиона токенов в месяц.
-*   **Затраты на API:** 1.8M токенов × $0.40 = **$0.72 в месяц**.
+*   **Затраты на API:** $0.10 × 1.5M (input) + $0.32 × 0.3M (output) = **$0.25 в месяц** (по тарифам 2026).
 
 > **Вывод:** При низком батче (memory-bound) API всегда на порядки дешевле. Вы не платите за простой (idle) мощного чипа. Свое железо здесь берут только ради privacy (нельзя отправлять данные в API) или для uncensored генерации.
 
@@ -48,6 +78,43 @@
 4. **Асинхронные задачи на Spot-инстансах.** Анализ огромных логов, где сбой машины не критичен. Облачные провайдеры (AWS, GCP) отдают прерываемые GPU со скидкой **60–80%** (3x-6x дешевле on-demand).
 
 > **Пруф / Кейс из индустрии (Оркестрация Spot-инстансов):** Использование фреймворков вроде **[SkyPilot (SkyServe)](https://skypilot.readthedocs.io/en/latest/serving/sky-serve.html)** или исследовательских систем **SpotServe** (ASPLOS 2024) позволяет автоматически искать самые дешевые Spot-инстансы по всем регионам (Multi-Cloud/Multi-Region Arbitrage). Если AWS забирает ваш GPU (дает 2-минутный preemption warning), оркестратор ставит ноду на паузу и прозрачно поднимает новую в другом регионе с fall-back на On-Demand. Это позволяет крутить LLM-инференс за ~$400/мес вместо ~$1200/мес (скидка до 70%).
+
+### Reserved Instances и Committed Use Discounts
+
+Если нагрузка предсказуемая (известный baseline, например рабочие часы
+24×5), главный механизм экономии — **долгосрочные коммитменты у
+hyperscaler'а или provider'а**:
+
+| Провайдер | Тип | Скидка vs on-demand | Срок |
+|---|---|---:|---|
+| AWS | Savings Plans / Reserved Instances | 30-72% | 1-3 года |
+| GCP | Committed Use Discounts (CUD) | 25-55% | 1-3 года |
+| Azure | Reserved VM Instances | 30-65% | 1-3 года |
+| RunPod | Reserved Tier | 30-50% | месяц+ |
+| Lambda Labs | Reserved Clusters | 40-60% | 3-12 мес |
+
+Пример: 1× A100 80GB на AWS p4d on-demand $4.10/hr ×24×30 = $2952/мес.
+3-year Savings Plan no-upfront: $1.32/hr ×24×30 = $950/мес. Экономия
+68%. Для production-нагрузок без сильной волатильности это **самый
+большой single discount**, который можно получить.
+
+### Batch APIs — 50% скидка для async задач
+
+Провайдеры **Anthropic Messages Batches API** и **OpenAI Batch API**
+дают **50% скидку** на стоимость токенов для асинхронных задач с SLA
+«ответ в течение 24 часов». Идеально для:
+
+- Ночные пакетные обработки (фоновая разметка, embeddings, NER).
+- Backfill / историческая обработка.
+- Не-real-time analytics.
+
+Пример: классификация 10M комментариев через Claude Sonnet 4.6.
+- Online API: $3 input + $15 output × 10M = $30K - $150K в зависимости от длин.
+- Batch API: 50% off — $15K - $75K.
+
+Объединяется с **prompt caching** (см. §8.2) — можно получить
+комбинированную скидку до 80% для повторяющихся системных промптов
+в батч-режиме.
 
 **Математика (Корпоративный RAG):**
 *   Для 70B (INT4) вы арендуете 2× RTX 3090 на 9 часов в день: 9 × $0.60 = **$5.4 в день** (~$118 в рабочий месяц).
@@ -83,6 +150,55 @@
 
 > **Вывод:** При постоянной нагрузке 24/7 и утилизации близкой к 100% покупка железа окупается меньше чем за год. Если нагрузка падает (средняя утилизация 30%), окупаемость растягивается до 2–3 лет.
 
+### Полная TCO модель On-Premise (что забывают в Capex)
+
+Простая модель «Capex + электричество» (как в примере выше) скрывает
+3-4× реальной стоимости владения. Полный TCO для серверной 2× H100:
+
+| Категория | Доля от 3-летнего TCO | Что это |
+|---|---:|---|
+| GPU hardware | 40-50% | $25K-30K за H100, $5K за RTX-5090 |
+| Server chassis + CPU + RAM + NVMe | 10-15% | $5-10K за полный сервер 2×GPU |
+| Power (электричество) | 8-15% | TDP × hours × $/kWh; для 8× H100 ~$2K/мес |
+| **Cooling** | **8-12%** | 30-40% от Power; HVAC, чиллеры |
+| Networking (NICs, switch, InfiniBand для multi-node) | 5-10% | ConnectX-7 — $1.5K/карта, IB switch $15K+ |
+| Rack space (colocation) | 3-7% | $500-1500/U/мес если не свой ДЦ |
+| Depreciation accounting | 5% | GPU стареет за 3-5 лет, MACRS schedule |
+| **Workforce (MLOps engineer)** | **15-30%** | **$150-250K/год полностью загруженный** |
+
+Пример полного TCO для production 2× H100 24/7 за 3 года:
+- Hardware: $60K (2 × H100 + сервер)
+- Power+Cooling: $25K (~$700/мес × 36)
+- Networking + colocation: $15K
+- Depreciation: уже включено в hardware
+- MLOps fraction (0.2 FTE для 1 сервера): $90K (3 × $30K) — **самая большая статья после железа**
+- **Total: ~$190K за 3 года** ≈ $5.3K/мес
+
+Сравнение: AWS p5.48xlarge (8×H100) — $35/hr × 24×30 = $25K/мес на on-demand,
+$10K/mo на 3-yr Reserved. Один сервер 2×H100 на полной нагрузке
+эквивалентен **~$5K/мес** в TCO — выгоднее 3-yr Reserved для **1/4** от
+8×H100 mainframe только если у вас есть DevOps capacity.
+
+> **Главный скрытый расход — люди**, не железо. Без MLOps engineer'а
+> сервер простаивает / падает / устаревает. Это причина почему 80%
+> стартапов остаются на API дольше чем «математически рационально».
+
+### Power Efficiency (perf/watt) — третья ось FinOps
+
+| GPU | TDP | Peak BF16 | TFLOPS/W | $/perf — относительно |
+|---|---:|---:|---:|---:|
+| A100 SXM | 400W | 312 TFLOPS | 0.78 | 1.0× (baseline) |
+| H100 SXM | 700W | 989 TFLOPS | 1.41 | **0.55×** (1.8× efficient) |
+| H200 SXM | 700W | 989 TFLOPS | 1.41 | то же что H100 |
+| B200 | 1000W | 2250 TFLOPS | 2.25 | **0.35×** (2.9× efficient) |
+| RTX-3090 | 350W | 142 TFLOPS | 0.41 | 1.9× (хуже A100) |
+| RTX-5090 | 575W | 419 TFLOPS | 0.73 | ~1.0× |
+
+H100/B200 — **в 2-3× энергоэффективнее A100** на ваттах. При
+power-bound ДЦ (что часто в US/EU) это переводится в больший
+эффективный compute на тот же контракт. Это **главный фактор**
+почему hyperscalers переходят на H100/B200 несмотря на higher Capex.
+
 ---
 
 ## 5. Вариант D: Edge & On-Device (Inference на конечных устройствах)
@@ -104,6 +220,33 @@
 2. Когда случается **пик трафика (Spike)**, который железо не может переварить (загрузка GPU 100%, очередь растет), ваш LLM-балансировщик (например, **LiteLLM**, **Martian** или **Cloudflare AI Gateway**) прозрачно перенаправляет излишки запросов в **Managed API** (OpenRouter, Groq, OpenAI).
 3. Вы платите дорогую ставку API *только* за излишки, избегая покупки лишних серверов, которые простаивали бы 90% времени в ожидании пиков.
 
+### Disaggregated Prefill / Decode (SOTA 2025-2026 pattern)
+
+Из Часть 3 (PRIMER) мы знаем что **prefill** compute-bound, а **decode**
+memory-bound — это означает что оптимальный GPU для prefill и для
+decode разный.
+
+- **Prefill cluster**: H100/B200 с высокими FLOPS (compute-bound).
+- **Decode cluster**: A100 или даже L40 — дешевле, но достаточная
+  memory bandwidth.
+
+Пример из NVIDIA Dynamo / DistServe (OSDI'24):
+
+| Подход | Hardware | Cost/M tokens | TTFT | Throughput |
+|---|---|---:|---:|---:|
+| Один пул H100 (homogeneous) | 8× H100 | $0.50 | 80ms | 12K tok/s |
+| Disaggregated 4×H100 prefill + 4×A100 decode | mixed | **$0.35** | 75ms | 14K tok/s |
+
+Экономия **30%** на стоимости-за-токен за счёт того что decode-серверы
+не тратят дорогих H100 FLOPS впустую (они memory-bound).
+
+Реализации: **NVIDIA Dynamo**, **DistServe** (research), **vLLM v1
+disagg mode** (экспериментально с v0.7+).
+
+> **Trade-off:** дополнительная сетевая задержка для трансфера KV-cache
+> между prefill и decode серверами (нужен NVLink между узлами или
+> InfiniBand). Без быстрого interconnect преимущество съедается.
+
 ---
 
 ## 7. Дает ли свое железо преимущество по скорости?
@@ -115,6 +258,32 @@
 1. **Скорость одного ответа (TTFT и Decode Speed).** Провайдеры API (Groq, Together) обслуживают Llama-70B на кластерах из **8× H100**, используя массивный Tensor Parallelism (TP=8). Это дает гигантскую эффективную пропускную способность памяти ($B_{\text{eff}}$) и невероятно быстрый memory-bound decode. Вы на своих 2× RTX 3090 никогда не получите скорость генерации в 100+ токенов/с для одного пользователя, которую дают гиганты.
 2. **Гарантированная задержка (Predictability).** Публичное API подвержено сетевым задержкам, rate limits (лимитам запросов) и эффекту «шумных соседей» (вечером API может тормозить). Свой сервер (Cloud или On-Premise) дает 100% стабильный TTFT и никаких лимитов.
 3. **Throughput per dollar.** Свое железо выигрывает не в скорости ответа одному пользователю (стриминге), а в количестве пользователей, которых можно обслуживать одновременно за те же деньги, если перейти в compute-bound (batching).
+
+### ⚠ Multi-GPU без NVLink — потраченные деньги
+
+Из инварианта эмулятора (PRIMER 4.5):
+
+> Если `tp_size = K` и `tp_efficiency = 1/K`, эмулятор возвращает **то же время**,
+> что и одна GPU.
+
+Это значит: 2× RTX-3090 через PCIe **без NVLink** даёт ровно тот же
+throughput, что одна 3090, при удвоенной цене за час аренды/амортизации.
+**Multi-GPU без NVLink имеет смысл только для capacity** (модель не
+влезает в одну карту), не для скорости.
+
+Практическое правило: если рассматриваете multi-GPU сервер для скорости —
+**проверяйте interconnect**:
+
+| Connection | Bandwidth | Multi-GPU FinOps verdict |
+|---|---:|---|
+| PCIe 4.0 x16 | 32 GB/s | TP неэффективен; только pipeline parallel = capacity, не speed |
+| PCIe 5.0 x16 | 64 GB/s | Чуть лучше, всё ещё bottleneck для TP |
+| NVLink 4 (A100 SXM) | 600 GB/s | TP работает почти линейно |
+| NVLink 5 (H100/B200 SXM) | 900 GB/s | TP работает линейно |
+| NVSwitch (full mesh 8-way) | 900 GB/s × N | TP линеен до 8 GPU |
+
+Эмулятор моделирует это через `tp_efficiency`: 0.50 для 2× 3090 PCIe
+(эмпирически измерено), 0.95-1.0 для NVLink.
 
 ## Главное правило LLM FinOps
 
@@ -143,7 +312,7 @@
 *   **Prompt Caching (API):** Провайдеры (Anthropic, OpenAI) предлагают скидку до **90%** на "закэшированные" входные токены. Если ваш системный промпт или контекстный документ занимает 10,000 токенов и остается неизменным для всех пользователей, вы платите за него полную цену только один раз.
 
 ### 8.3. Альтернативное железо: AWS Inferentia и Groq LPU
-Экономика LLM заставляет компании уходить от универсальных GPU (Nvidia) к специализированным чипа (ASIC):
+Экономика LLM заставляет компании уходить от универсальных GPU (Nvidia) к специализированным чипам (ASIC):
 
 1.  **AWS Inferentia2 (Inf2):** 
     *   *Математика:* Аренда `inf2.xlarge` (32GB) стоит ~$0.75/час против ~$1.00/час за Nvidia A10G (`g5.xlarge`). На стабильных Production-нагрузках Inferentia обеспечивает на **25–40% меньшую стоимость за 1М токенов**, чем Nvidia.
@@ -161,3 +330,226 @@
 2.  **Ascend 910C (Альтернатива H100):** Новый чип с **128GB HBM3** памяти. Хотя по «чистым» FLOPs он уступает H100 (выдает около 60% его мощности на инференсе), огромный объем памяти делает его невероятно выгодным для гигантских MoE-моделей (Mixture of Experts, например, DeepSeek-V4/R1). В 128GB можно уместить бóльший батч или бóльшую часть модели, уменьшая потребность в объединении чипов (Tensor Parallelism).
 
 *   **Трейд-офф (Программная экосистема):** NVIDIA доминирует за счет CUDA. Для Huawei требуется использование их собственного стека **CANN** (Compute Architecture for Neural Networks) и фреймворка MindSpore (или адаптированного PyTorch). Без ручной оптимизации кернелов производительность на Ascend может быть низкой, но при должной настройке кластеры Huawei выдают **на 60–70% меньший TCO (Total Cost of Ownership)** по сравнению с закупкой контрабандных чипов Nvidia в санкционных регионах.
+
+### 8.5. MoE экономика: компромисс между total и active params
+
+Mixture-of-Experts модели (Mixtral, Qwen3, DeepSeek-V3/V4) ломают
+привычную FinOps математику тем, что **разные ресурсы тратятся
+по-разному**:
+
+| Ресурс | Считается по... | Почему |
+|---|---|---|
+| VRAM (capacity) | $N_{\text{total}}$ | все эксперты лежат в памяти |
+| Compute (FLOPS / TTFT при compute-bound) | $N_{\text{active}}$ | router выбирает top-k экспертов на токен |
+| **Memory bandwidth (decode!)** | $N_{\text{active}}$ | только активные эксперты читаются на каждом шаге |
+
+Последний пункт — критичен и часто упускается. Это значит:
+
+**Mixtral 8x7B (46.7B total / 12.9B active):**
+- Память: как у 47B dense (нужен A100 80GB или 2× 4090).
+- Decode-скорость: как у **13B dense** на том же железе (≈ 3.6× быстрее наивных ожиданий).
+
+**DeepSeek-V3 (671B total / 37B active):**
+- Память: 671 × 4 / 8 = **335 GB Q4** → нужно 5+ H100 или 2 B200 (по VRAM).
+- Decode-скорость: эквивалентна **37B dense** → ~$0.30/M output на собственном железе.
+
+**Экономический эффект:** MoE даёт качество big-model по цене медиум-модели.
+Это причина почему DeepSeek-V3 на API стоит $0.32/$0.89 (как 30B dense),
+а не $3.00 (как 405B dense).
+
+> **Гетча для on-premise:** хотя decode быстрый, **сама модель занимает
+> много VRAM**. DeepSeek-V3 671B не запустится на одной A100 (80GB) —
+> нужно 5× H100 минимум. То есть «дёшево как 37B» работает **только для
+> хостеров с большим железом**. Для individual deployment MoE часто
+> экономически хуже dense эквивалента.
+
+В нашем эмуляторе MoE моделируется через параметр `n_active_b`:
+`--model 1600 --active 49` (DeepSeek-V4-Pro), decode читает только
+12.9/46.7 = 28% весов на шаг (commit `4fdaa87` зафиксил bug где читались
+все).
+
+### 8.6. Sliding window для long-context FinOps
+
+DeepSeek-V4 и Mistral используют **sliding window attention**
+(`sw=128` для V4, `sw=4096` для Mistral) — KV-cache не растёт линейно
+с контекстом, а ограничен последними W токенами.
+
+Финансовый эффект для long-context use-cases (RAG, агенты, документы):
+
+**Пример: DeepSeek-V4-Pro, контекст 1M токенов, batch=4:**
+
+| Конфигурация | KV / token | KV total (1M × 4) | Что закроет |
+|---|---:|---:|---|
+| Full attention (без SW) | ~62 KB | **243 GB** | 3+ H100/B200 только под KV |
+| Sliding window=128 | то же | **0.03 GB** | 0 — почти бесплатно |
+
+**Сокращение KV-памяти в ~8000×.** Это эквивалентно сокращению
+hardware cost для long-context inference в порядки. Это и есть причина
+почему DeepSeek-V4 «1M context» вообще практичен.
+
+Trade-off: sliding window — приближение (модель не "видит" token'ы за
+window). Для большинства задач (RAG, чат) это OK, но не для задач
+требующих full-document understanding (long-document summarization
+с факт-чеком).
+
+> Эмулятор моделирует это через `sliding_window` параметр.
+> `python3 scripts/cli.py --model 1600 --sliding-window 128 ...`
+> автоматически подхватывается для DeepSeek-V4 из `ARCH_DEFAULTS`.
+
+### 8.7. Speculative decoding: ROI и trade-off
+
+Speculative decoding даёт **2-3× ускорение decode** для batch=1
+(см. PRIMER 5.2). FinOps-эффект:
+
+**Плюсы:**
+- Per-stream throughput ×2-3 → ниже total latency для пользователя.
+- При фиксированной нагрузке → нужно в 2-3× меньше GPU для того же объёма.
+
+**Минусы:**
+- Нужно держать **draft-модель** в VRAM — extra 0.5-2 GB (для Llama-3.2-1B draft при Llama-3-70B main).
+- При batch > 4 эффект падает в 0: draft становится bottleneck-ом.
+- Не работает для creative tasks где acceptance rate <30% (slow models).
+
+**Where it makes financial sense:**
+
+| Сценарий | Spec decode? |
+|---|---|
+| Single-user chat (batch=1) | ✅ Включить — ×2 throughput на единицу железа |
+| Высокий batch (>8) | ❌ Эффект 0, draft занимает место зря |
+| RAG / structured output | ✅ Acceptance rate высокий (короткие предсказуемые ответы) |
+| Creative writing | ⚠️ Зависит от модели (Llama OK, Mistral хуже) |
+
+Пример: chat-сервис на Llama-3.1-70B AWQ, batch=1, 100 пользователей одновременно.
+
+| Без spec decode | С spec decode |
+|---|---|
+| 5× A100 нужно (по 20 user/GPU) | **2× A100 нужно** |
+| $5 × $0.79/hr = $3.95/hr | $1.58/hr |
+| Экономия | **−60%** |
+
+В эмуляторе: `--speculative --spec-accept-rate 0.7 --spec-k-proposed 4`
+(см. `cli.py --help`). Эмулятор моделирует и speedup, и overhead
+draft-модели.
+
+---
+
+## 9. Как посчитать FinOps в этом эмуляторе
+
+Все вышеперечисленные сценарии можно посчитать **точно** в `scripts/cli.py`
+с флагом `--cost-per-hour`. Эмулятор печатает `$ per million tokens`
+рядом с throughput, что превращает roofline в готовый калькулятор.
+
+### Общая формула
+
+```
+$/M tokens = (cost_per_hour) × 10⁶ / (throughput_tok_s × 3600)
+```
+
+CLI делает это автоматически и подставляет throughput из калиброванной
+(или literature default) формулы.
+
+### Рецепт 1 — Когда переходить с API на On-Premise (Llama-3.3-70B AWQ)
+
+**Сценарий:** chat-сервис, P_in=512, P_out=128, ожидаемая нагрузка
+batch=32 в среднем.
+
+```bash
+# A100 vs H100 vs RTX-5090 — какой вариант дешевле?
+for HW in 1xA100 1xH100 1xRTX-5090; do
+    case $HW in
+        1xA100)     COST=0.79 ;;   # RunPod on-demand 2026
+        1xH100)     COST=2.30 ;;
+        1xRTX-5090) COST=0.69 ;;
+    esac
+    echo "=== $HW @ \$$COST/hr ==="
+    python3 scripts/cli.py --model 70 --bits 4.5 --hw $HW --engine vllm \
+        --p-in 512 --p-out 128 --batch 32 \
+        --cost-per-hour $COST | grep -E "throughput|cost"
+done
+```
+
+Сравниваем result с API ценой Llama-3.3-70B на OpenRouter:
+input $0.10/M, output $0.32/M → среднее ~$0.20/M. Если cloud GPU
+дешевле — рассматриваем on-premise/cloud-rent. Если дороже — остаёмся
+на API.
+
+### Рецепт 2 — Break-even batch для compute-bound на A100
+
+**Вопрос:** какой минимальный batch нужен чтобы Llama-3.3-70B AWQ на
+A100 вышел в compute-bound (и значит throughput-per-dollar максимален)?
+
+```bash
+for B in 1 4 16 32 64 100 200; do
+    python3 scripts/cli.py --model 70 --bits 4.5 --hw 1xA100 --engine vllm \
+        --p-in 512 --p-out 128 --batch $B \
+        --cost-per-hour 0.79 | grep -E "decode|cost"
+done
+```
+
+Ищем тот batch, где `bottleneck_decode` переходит с `memory` на
+`compute`. Дальше throughput растёт медленнее → диминишинг returns
+по cost. Это ваша «sweet spot» concurrency.
+
+### Рецепт 3 — MoE vs Dense на тех же ресурсах
+
+**Сценарий:** есть 4× A100 80GB ($4.40/hr at $1.10 each via Reserved
+Instance). Mixtral 8x7B AWQ vs Llama-3.3-70B AWQ.
+
+```bash
+# Mixtral 8x7B AWQ (46.7B/12.9B active) — влезает в 1 A100
+python3 scripts/cli.py --model 46.7 --bits 4 --hw 1xA100 --engine vllm \
+    --p-in 1024 --p-out 256 --batch 32 --cost-per-hour 1.10
+
+# Llama-3.3-70B AWQ (70B dense) — требует 2 A100 TP=2 (нет в HARDWARE_SPECS,
+# но можно ручную оценку как `1xA100 × 2`)
+python3 scripts/cli.py --model 70 --bits 4 --hw 1xA100 --engine vllm \
+    --p-in 1024 --p-out 256 --batch 32 --cost-per-hour 1.10
+# ↑ покажет нехватку памяти; реальный 2× A100 даст в 1.8× throughput
+```
+
+Это покажет — даёт ли MoE преимущество $/M tokens на вашем оборудовании.
+
+### Рецепт 4 — Спекулятивное декодирование ROI
+
+```bash
+echo "=== Без spec decode ==="
+python3 scripts/cli.py --model 70 --bits 4 --hw 1xA100 --engine vllm \
+    --p-in 512 --p-out 256 --batch 1 --cost-per-hour 0.79
+
+echo "=== Со spec decode (r=0.7, k=4) ==="
+# Если CLI поддерживает флаги --speculative / --spec-accept-rate
+python3 scripts/cli.py --model 70 --bits 4 --hw 1xA100 --engine vllm \
+    --p-in 512 --p-out 256 --batch 1 --cost-per-hour 0.79 \
+    --speculative --spec-accept-rate 0.7 --spec-k-proposed 4
+```
+
+Сравниваем `cost per million tokens` — это и есть ROI от spec decode
+для вашего scenario.
+
+### Точность прогноза
+
+Эмулятор даёт **±15-30%** в калиброванной области (см.
+`docs/BENCHMARK_SOURCES.md` §2 для конкретных валидационных точек:
+Baseten Mixtral, Qwen Speed Bench, Morphllm H100). На extrapolation
+ошибка может быть до 2× — особенно для `(hw, engine)` пар, для которых
+у нас нет калибровки (см. §2.2 vLLM на A100 — +50% сейчас, после
+запланированной A100-калибровки должно упасть до ±15%).
+
+**Что это значит для FinOps:** прогнозы эмулятора достаточны для
+**стратегических решений** (API vs cloud vs on-prem, выбор GPU, MoE
+vs dense). Для **тактических** (точный sizing production), нужна
+калибровка на вашем железе — см. `docs/A100_CALIBRATION_PLAN.md` для
+playbook.
+
+### Cross-references
+
+- [`docs/PRIMER.md`](PRIMER.md) — физика roofline, откуда берутся числа.
+- [`docs/BENCHMARK_SOURCES.md`](BENCHMARK_SOURCES.md) — какие именно
+  benchmark'и стоят за каждым калиброванным α, β, batch_saturation.
+- [`docs/WALKTHROUGH.md`](WALKTHROUGH.md) — пошаговый пример расчёта
+  одного scenario с CLI до миллисекунд.
+- [`results/REPORT.md`](../results/REPORT.md) — точность predicted-vs-observed
+  по всем калиброванным buckets.
+- [`docs/A100_CALIBRATION_PLAN.md`](A100_CALIBRATION_PLAN.md) — как
+  снять собственную калибровку на A100 (или другом железе) для tight
+  FinOps на вашем deployment.

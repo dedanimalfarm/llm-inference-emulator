@@ -98,6 +98,10 @@ python scripts/demo.py
 6. [`docs/A100_CALIBRATION_PLAN.md`](docs/A100_CALIBRATION_PLAN.md) —
    playbook следующей калибровочной сессии на A100: какие шаблоны
    Vast/RunPod взять, какие модели прогнать, бюджет и success criteria.
+7. [`docs/FINOPS.md`](docs/FINOPS.md) — экономика LLM-инференса:
+   API vs Cloud GPU vs On-Premise, актуальные цены 2026, MoE/sliding
+   window/speculative ROI, Reserved Instances, disaggregated serving,
+   TCO с workforce. С CLI-рецептами через `--cost-per-hour`.
 
 ## What this gives you
 
