@@ -21,9 +21,10 @@ HARDWARE_SPECS = {
         "tdp_w": 275,
     },
     "1xA100-40": {
-        # NVIDIA A100 40GB SXM4 — Ampere
+        # NVIDIA A100 40GB SXM4 — Ampere (User instance details)
+        # Observed bandwidth: 1314.8 GB/s, Peak: 1555 GB/s
         "peak_tflops": {16: 312.0, 8: 624.0, 4: 624.0},
-        "memory_bandwidth_gbs": 1555.0,
+        "memory_bandwidth_gbs": 1314.8,
         "memory_capacity_gb": 40.0,
         "tdp_w": 400,
     },
