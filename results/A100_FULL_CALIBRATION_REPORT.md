@@ -64,6 +64,23 @@ Compared Qwen-7B at `batch=50` with and without KV-FP8:
 - **Finding**: **Throughput halved (-50%)** when switching to KV-FP8. vLLM (v0.9.1) fell back from FlashAttention to XFormers because FlashAttention does not natively support FP8 KV-cache on Ampere.
 - **Recommendation**: Avoid KV-FP8 on A100/Ampere unless VRAM is the absolute bottleneck (e.g., Llama-70B long context), as the kernel efficiency loss outweighs the capacity gains.
 
+## Phase 5: Grand Finale — Stress Limits
+
+> Added 2026-05-15. Testing the absolute boundaries of the A100-40GB.
+
+### Ultra-Long Context Scaling (Qwen-7B)
+Tested prefill throughput at extreme lengths with `--enforce-eager`:
+- **32k context**: ~7922 total tok/s
+- **64k context**: **6186 total tok/s**
+- **128k context**: **FAILED** (RuntimeError: illegal memory access). 
+- **Finding**: While Qwen-2.5-7B supports 128k context, the current vLLM/CUDA implementation on A100-40GB hits a hardware/driver limit or kernel bug at lengths >64k. The emulator should model a "safety wall" at 64k for this specific hardware/software stack.
+
+### Speculative Decoding (Drafting)
+Attempted to use Qwen-1.5B as a draft model for Qwen-7B:
+- **Baseline (7B only)**: ~1280 total tok/s (p1024/g128/b10).
+- **Result**: **FAILED** (AssertionError: vocab_size mismatch).
+- **Insight**: Speculative decoding between Qwen sizes (7B vs 1.5B) requires vocab alignment (152064 vs 151936), confirming that "drafting" isn't a free lunch even within the same model family.
+
 ---
 
 ## 4. Validation Cross-Checks
