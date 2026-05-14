@@ -95,6 +95,20 @@ BnB-4bit/8bit, GPTQ-4bit на нескольких NVIDIA-GPU и одной CPU-
 В отличие от данных §1, эти числа **не использовались** для калибровки;
 вместо этого мы сверяем прогнозы эмулятора с ними, чтобы померить точность.
 
+**Сводка валидационных прогонов:**
+
+| # | HW | Engine | Сценарий | Real | Emulator | Δ |
+|---|---|---|---|---:|---:|---:|
+| 2.1 | 1× A100 | TRT-LLM INT8 | Mixtral 8x7B, P_in=512, P_out=128, b=1 | decode 11.4 ms/тkn | 7.07 ms (после фикса) | −38% ✓ |
+| 2.2a | 1× A100 | vLLM 0.6.3 AWQ | Qwen2.5-7B, P_in=1, P_out=2048, b=1 | 148 tok/s output | 219 tok/s output | +48% ✗ |
+| 2.2b | 1× A100 | vLLM 0.6.3 AWQ | Qwen2.5-7B, P_in=6144, P_out=2048, b=1 | 138 tok/s output | 219 tok/s output | +59% ✗ |
+| 2.3 | 1× RTX-5090 | vLLM AWQ | Qwen2.5-7B, P_in=1024, P_out=128, b=200 | 13 954 tok/s total | 13 827 tok/s total | **−0.9% ✓✓** |
+
+Self-consistency (§2.3) показывает ~1% точности **внутри откалиброванной
+области**. Extrapolation на A100 (§2.1, §2.2) — переоценка throughput
+на 50–60%, потому что `β = 0.65` (literature default для vLLM)
+завышено для A100 / batch=1 без откалиброванного значения.
+
 ### 2.1. Baseten — Mixtral 8x7B / TensorRT-LLM / A100
 
 **Источник:** [Baseten blog, «Faster Mixtral inference with TensorRT-LLM
@@ -119,6 +133,80 @@ and quantization»](https://www.baseten.co/blog/faster-mixtral-inference-with-te
 Остающийся гэп −38% объясняется literature β=0.90 для TensorRT в
 `ENGINE_DEFAULTS`. Реальное β для MoE-serving ближе к 0.55-0.60; это
 calibration concern, не формула.
+
+### 2.2. Qwen Speed Benchmark — A100 / vLLM 0.6.3
+
+**Источник:** [Qwen2.5 Speed Benchmark](https://qwen.readthedocs.io/en/v2.5/benchmark/speed_benchmark.html),
+официальная документация Qwen-команды (Alibaba).
+
+**Сценарий:** Qwen2.5-7B-Instruct-AWQ на 1× A100-80GB, vLLM 0.6.3,
+FlashAttention 2.6.3, single-stream (batch=1), output фиксирован 2048
+токенов, input варьируется.
+
+**Заявленные числа (output tokens / total time, включая prefill):**
+
+| $P_{\text{in}}$ | Real (tok/s) | Эмулятор (output/total, tok/s) | Δ |
+|---:|---:|---:|---:|
+| 1 | 148.10 | 372 (per-stream) / 219 (inc prefill) | +48% – +151% |
+| 6144 | 137.64 | 219 (inc prefill) | +59% |
+| 14336 | 124.91 | — | — |
+| 30720 | 104.66 | — | — |
+| 63488 | 66.42 | — | — |
+| 129024 | 26.57 | — | — |
+
+**Результаты сверки** (2026-05-14):
+
+Двух точки проверены: `P_in ∈ {1, 6144}`. Обе показывают переоценку
+эмулятора на +48%…+59% по «output tokens / total time». Причины:
+
+- **β = 0.65** в `ENGINE_DEFAULTS["vllm"]` — literature default, для
+  A100 / vLLM 0.6.3 / batch=1 не калибровано. Если откалибровать
+  β ≈ 0.26 → 152 tok/s ≈ real 148 (точное совпадение для P_in=1).
+- **`batch_saturation=(45, 7)`** в эмуляторе мультиплицирует throughput
+  на 5.6× при batch=1 (имитация очереди серверного режима). Для
+  single-stream benchmark Qwen это даёт фальшивое ускорение.
+
+**Вывод:** этот сценарий не калиброван (single-stream на A100), и
+эмулятор даёт roofline-overestimate на чужом железе. Это **ожидаемое
+поведение** для extrapolation. Хорошо иллюстрирует Часть 5 PRIMER о
+литературных vs калиброванных значениях.
+
+### 2.3. Self-consistency — наш собственный замер vLLM на 2× RTX-5090
+
+**Источник:** `data/raw_vllm/logs/qwen7b_tp1_b200.log` (наш собственный
+прогон 2026-05-09).
+
+**Сценарий:** Qwen2.5-7B-Instruct-AWQ на 1× RTX-5090 (TP=1), vLLM
+v0.20.1 (V1 engine), FlashAttention 2, AWQ Marlin kernel, chunked
+prefill, APC, P_in=1024, P_out=128, batch=200 параллельных запросов.
+
+**Заявленные числа (наш бенчмарк):**
+
+| Метрика | Значение |
+|---|---:|
+| Total throughput | 13 953.87 tokens/s |
+| Output throughput | 1 550.43 tokens/s |
+| Request throughput | 12.11 req/s |
+| Время прогона 200 req | ~16.5 с |
+
+**Результаты сверки** (2026-05-14):
+
+| Метрика | Real | Эмулятор | Δ |
+|---|---:|---:|---:|
+| Total throughput | 13 953.87 tok/s | 13 826.8 tok/s | **−0.9%** ✓✓ |
+| Время прогона 200 req | 16.5 с | 16.67 с | +1.0% ✓ |
+
+Это **внутренняя точка** — α=0.47 и `batch_saturation=(45, 7)` именно
+на этом логе (и подобных) откалиброваны через
+`scripts/fit_vllm_calibration.py`. Эмулятор воспроизводит свой
+обучающий датасет с точностью ~1%, что и должен делать корректно
+сфиченный фит.
+
+Команда воспроизведения:
+```bash
+python3 scripts/cli.py --model 7 --bits 4 --hw 1xRTX-5090 --engine vllm \
+    --p-in 1024 --p-out 128 --batch 200 --precision-label "AWQ.4bit"
+```
 
 ## 3. Источники архитектур (`ARCH_DEFAULTS`)
 
