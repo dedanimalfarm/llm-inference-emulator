@@ -95,6 +95,9 @@ python scripts/demo.py
 5. [`docs/BENCHMARK_SOURCES.md`](docs/BENCHMARK_SOURCES.md) — каталог
    всех использованных источников данных: для калибровки, для
    валидации, архитектурные refs, методологические ссылки.
+6. [`docs/A100_CALIBRATION_PLAN.md`](docs/A100_CALIBRATION_PLAN.md) —
+   playbook следующей калибровочной сессии на A100: какие шаблоны
+   Vast/RunPod взять, какие модели прогнать, бюджет и success criteria.
 
 ## What this gives you
 
