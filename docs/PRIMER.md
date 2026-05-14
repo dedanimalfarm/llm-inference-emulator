@@ -292,7 +292,48 @@ W = N * bits / 8.0  # weights in bytes
 Чего пока **не** понимаем: что именно происходит внутри одного вызова
 модели и почему формула FLOPS = $2 \cdot N \cdot P$ верна. Это — Часть 2.
 
----
+## Упражнения к Части 1
+
+**1.1.** Сколько токенов содержит фраза `"Hello, world!"`? А
+`"Привет, мир!"`? Почему числа разные?
+
+<details><summary>Решение</summary>
+
+`"Hello, world!"` — обычно 3-4 токена (`Hello`, `,`, `Ġworld`, `!`).
+`"Привет, мир!"` — обычно 5-7 токенов: каждое русское слово разбито
+на 2-3 подслова. Это следствие обучения tokenizer'а
+преимущественно на английском корпусе (см. 1.1, асимметрия русский ↔ английский).
+</details>
+
+**1.2.** Сколько *forward pass'ов* модели потребуется, чтобы из
+промпта 1024 токена сгенерировать ответ 256 токенов?
+
+<details><summary>Решение</summary>
+
+$1 + 256 = 257$ forward pass'ов: один на весь промпт (prefill) и
+по одному на каждый сгенерированный токен (decode). Более подробно
+о двух фазах — в Части 3.
+</details>
+
+**1.3.** Каков размер Mistral-7B-Instruct в (а) FP16, (б) Q4_K_M
+($\text{bpw} = 4.85$)?
+
+<details><summary>Решение</summary>
+
+Применяем $W = N \cdot \text{bpw} / 8$:
+- (а) $7 \times 10^9 \cdot 16 / 8 = 14 \text{ ГБ}$
+- (б) $7 \times 10^9 \cdot 4.85 / 8 \approx 4.24 \text{ ГБ}$
+</details>
+
+**1.4.** Поместится ли Mistral-7B (без активаций и overhead) на
+GPU с 16 ГБ VRAM в формате (а) FP16, (б) Q4_K_M?
+
+<details><summary>Решение</summary>
+
+(а) 14 ГБ ≤ 16 ГБ — влезает, но почти впритык. С учётом активаций
+и CUDA workspace (~2 ГБ) — *не влезает*.
+(б) 4.24 ГБ — легко влезает с большим запасом под KV-кэш и batch.
+</details>
 
 ---
 
@@ -855,7 +896,69 @@ GPU. `alpha` — MFU (доля пиковой производительност
 $P_{\text{out}}$ токенов decode часто медленнее чем такой же по длине
 prefill, хотя FLOPS одинаковые. Это — Часть 3.
 
----
+## Упражнения к Части 2
+
+**2.1.** Используя приближение $N \approx 12 \cdot L \cdot d_{\text{model}}^2$,
+оцените число параметров Llama-3.1-405B, если $L = 126$,
+$d_{\text{model}} = 16384$. Сравните с заявленным размером.
+
+<details><summary>Решение</summary>
+
+$N \approx 12 \cdot 126 \cdot 16384^2 = 12 \cdot 126 \cdot 2.68 \times 10^8 \approx 4.06 \times 10^{11} = 406 \text{ млрд}$.
+
+Это с точностью до 0.2% совпадает с заявленным размером 405B —
+формула $12 L d^2$ работает.
+</details>
+
+**2.2.** Сравните размер KV-кэша на один токен для Llama-3.1-70B
+($L = 80$, $d_h = 128$, $H = 64$) в двух конфигурациях:
+(а) без GQA ($H_{kv} = H = 64$); (б) с GQA ($H_{kv} = 8$).
+
+<details><summary>Решение</summary>
+
+Формула из 2.5: $L \cdot H_{kv} \cdot d_h \cdot 2$ (числа $K$ и $V$
+в FP16, $\text{bpe} = 16$ бит, → 2 байта).
+
+(а) $80 \cdot 64 \cdot 128 \cdot 2 \cdot 2 = 2{,}621{,}440$ Б $\approx 2.5 \text{ МБ/токен}$
+(б) $80 \cdot 8 \cdot 128 \cdot 2 \cdot 2 = 327{,}680$ Б $= 320 \text{ КБ/токен}$
+
+Соотношение: ровно $H/H_{kv} = 8\times$. GQA экономит 2.2 МБ
+на каждый токен контекста — на 8K контексте это 18 ГБ экономии.
+</details>
+
+**2.3.** Сколько FLOPS требует prefill промпта в 2048 токенов
+для Llama-3.1-8B? Сколько секунд это займёт на A100 ($C = 312$ TFLOPS,
+$\alpha = 0.3$), при условии что мы compute-bound?
+
+<details><summary>Решение</summary>
+
+$F = 2 \cdot 8 \times 10^9 \cdot 2048 = 3.28 \times 10^{13}$ FLOPS $= 32.8$ TFLOPS.
+
+$t = \frac{F}{C \cdot \alpha} = \frac{32.8}{312 \cdot 0.3} \approx 0.35 \text{ с} = 350 \text{ мс}$.
+</details>
+
+**2.4.** При каком $P$ attention-поправка $4 L d P^2$ становится
+сравнимой с matmul-членом $2 N P$? Выведите формулу и подставьте
+числа для Llama-3.1-8B.
+
+<details><summary>Решение</summary>
+
+Из условия $2 N P = 4 L d P^2$ следует:
+
+$$
+P = \frac{N}{2 L d}
+$$
+
+Для Llama-3.1-8B ($N = 8 \times 10^9$, $L = 32$, $d = 4096$):
+
+$$
+P = \frac{8 \times 10^9}{2 \cdot 32 \cdot 4096} \approx 30{,}517
+$$
+
+При $P \ll 30{,}517$ matmul доминирует и формула $2 N P$ достаточно
+точна. При $P \sim 30K+$ (длинные контексты типа RAG) attention
+становится значимым слагаемым.
+</details>
 
 ---
 
@@ -1363,7 +1466,74 @@ return InferenceResult(
 и «время на чтение байт», то есть как параметры GPU превращаются в
 секунды. Это — Часть 4.
 
----
+## Упражнения к Части 3
+
+**3.1.** Какой размер KV-кэша для одной сессии Llama-3.1-8B
+($L = 32$, $H_{kv} = 8$, $d_h = 128$) в FP16 на контексте 32K
+токенов? Поместится ли это в одну A100-80G вместе с весами FP16
+и overhead ~1 ГБ?
+
+<details><summary>Решение</summary>
+
+KV/токен $= 32 \cdot 8 \cdot 128 \cdot 2 \cdot 2 = 131{,}072$ Б $= 128$ КБ.
+
+На 32K токенов: $32{,}768 \cdot 128 \text{ КБ} = 4 \text{ ГБ}$.
+
+Веса FP16: $W = 8 \cdot 16 / 8 = 16 \text{ ГБ}$.
+
+Итого: $16 + 4 + 1 = 21 \text{ ГБ}$ ≤ 80 ГБ. Помещается с большим
+запасом — можно поднимать batch.
+</details>
+
+**3.2.** Тот же сценарий для Llama-3.1-70B FP16. Поместится ли на
+одну A100-80G? А на 2× A100-80G с NVLink?
+
+<details><summary>Решение</summary>
+
+Веса FP16: $70 \cdot 16 / 8 = 140 \text{ ГБ}$. Уже не помещаются в
+одну A100.
+
+KV/токен (с GQA): $80 \cdot 8 \cdot 128 \cdot 2 \cdot 2 = 327{,}680 \text{ Б} = 320 \text{ КБ}$.
+На 32K: $32{,}768 \cdot 320 \text{ КБ} = 10 \text{ ГБ}$.
+
+На 2× A100 (160 ГБ суммарно с TP): $140 + 10 + 1 = 151 \text{ ГБ}$ —
+влезает впритык (9 ГБ запаса). Batch практически невозможен; для
+больших batch нужно либо квантование (Q4 → 42 ГБ весов), либо 4× A100.
+</details>
+
+**3.3.** По упрощённой roofline (без KV-term) посчитайте
+$t_{\text{pre,compute}}$, $t_{\text{pre,mem}}$, $t_{\text{dec,mem}}$,
+$t_{\text{dec,compute}}$ для Mistral-7B FP16 на T4 ($C = 65$ TFLOPS,
+$B = 0.32$ ТБ/с), $\alpha = 0.3$, $\beta = 0.7$, $P_{\text{in}} = 512$,
+$b = 1$. Какая фаза в чём упирается?
+
+<details><summary>Решение</summary>
+
+Веса: $W = 7 \cdot 16 / 8 = 14 \text{ ГБ}$.
+
+Prefill:
+$t_{\text{pre,compute}} = \frac{2 \cdot 7 \times 10^9 \cdot 512}{65 \times 10^{12} \cdot 0.3} = \frac{7.17 \times 10^{12}}{1.95 \times 10^{13}} \approx 368 \text{ мс}$
+$t_{\text{pre,mem}} = \frac{14 \times 10^9}{0.32 \times 10^{12}} = 43.7 \text{ мс}$
+$t_{\text{pre}} = \max(368, 43.7) = 368 \text{ мс}$ — **compute-bound**.
+
+Decode (один токен):
+$t_{\text{dec,compute}} = \frac{2 \cdot 7 \times 10^9}{65 \times 10^{12} \cdot 0.3} \approx 0.72 \text{ мс}$
+$t_{\text{dec,mem}} = \frac{14 \times 10^9}{0.32 \times 10^{12} \cdot 0.7} = 62.5 \text{ мс}$
+$t_{\text{dec}} = \max(0.72, 62.5) = 62.5 \text{ мс}$ — **memory-bound**.
+</details>
+
+**3.4.** В сценарии (3.3) — какой throughput при batch=1?
+Сколько секунд займёт ответ из 100 токенов?
+
+<details><summary>Решение</summary>
+
+Throughput $= 1 / t_{\text{dec}} = 1 / 0.0625 = 16 \text{ tok/s}$.
+
+Total latency $= t_{\text{pre}} + 100 \cdot t_{\text{dec}} = 0.368 + 6.25 = 6.6 \text{ с}$.
+
+TTFT = 368 мс — пользователь увидит первый токен довольно быстро,
+но дальше декод медленный. Это типичная картина для T4 на 7B FP16.
+</details>
 
 ---
 
@@ -1965,7 +2135,81 @@ python3 scripts/cli.py --model 7 --bits 4.85 --hw 1xA100 \
 (vLLM, TensorRT-LLM, llama.cpp, SGLang), и как их параметры влияют на
 roofline. Это — Часть 5.
 
----
+## Упражнения к Части 4
+
+**4.1.** Посчитайте критическую arithmetic intensity $I_{\text{crit}} = C/B$
+для: (а) A100 ($C = 312$ TFLOPS FP16, $B = 2.04$ ТБ/с);
+(б) H100 ($C = 1979$ TFLOPS FP16, $B = 3.36$ ТБ/с).
+
+<details><summary>Решение</summary>
+
+(а) $I_{\text{crit}}^{\text{A100}} = 312 / 2.04 \approx 153 \text{ FLOPS/байт}$
+(б) $I_{\text{crit}}^{\text{H100}} = 1979 / 3.36 \approx 589 \text{ FLOPS/байт}$
+
+H100 в 3.8× выше — это значит, что операция должна быть в 3.8× более
+compute-intensive, чтобы быть compute-bound на H100. В частности,
+многие decode-сценарии, которые были «почти compute-bound» на A100,
+снова становятся memory-bound на H100.
+</details>
+
+**4.2.** При каком значении batch $b$ decode на A100 для Llama-7B
+FP16 переходит из memory-bound в compute-bound? Игнорируйте KV-term,
+$\alpha = 0.3$, $\beta = 0.7$.
+
+<details><summary>Решение</summary>
+
+Переход — равенство $t_{\text{dec,mem}} = t_{\text{dec,compute}}$:
+
+$$
+\frac{W}{B \cdot \beta} = \frac{2 N b}{C \cdot \alpha}
+$$
+
+Решая относительно $b$:
+
+$$
+b = \frac{W \cdot C \cdot \alpha}{2 N \cdot B \cdot \beta} = \frac{14 \times 10^9 \cdot 312 \times 10^{12} \cdot 0.3}{2 \cdot 7 \times 10^9 \cdot 2.04 \times 10^{12} \cdot 0.7} = \frac{1.31 \times 10^{24}}{2.00 \times 10^{22}} \approx 65.5
+$$
+
+То есть на $b \ge 66$ decode становится compute-bound. Это та граница,
+до которой continuous batching даёт линейный прирост throughput.
+</details>
+
+**4.3.** Проверьте sanity-инвариант для $\text{tp\_size} = 4$,
+$\text{tp\_efficiency} = 0.25$. Какое получается «эффективное число
+GPU»? Совпадает ли это с одной картой?
+
+<details><summary>Решение</summary>
+
+$\text{tp\_size} \cdot \text{tp\_efficiency} = 4 \cdot 0.25 = 1$.
+
+И compute, и bandwidth умножаются на ровно $1$:
+
+$C_{\text{eff}} = C \cdot 1, \quad B_{\text{eff}} = B \cdot 1$
+
+То есть полностью эквивалентно одной карте. Это и есть инвариант,
+проверяемый тестом `test_multi_gpu_capacity_only_when_tp_eff_inverse_of_size`.
+Если бы эмулятор давал разный ответ, был бы баг double-counting
+(см. 4.5, коммит 5885065).
+</details>
+
+**4.4.** Если квантовать Llama-3.1-70B с FP16 до Q4_K_M ($\text{bpw} = 4.85$),
+во сколько раз ускорится memory-bound decode на A100? Игнорируйте
+KV-term и считайте $\beta$ неизменным.
+
+<details><summary>Решение</summary>
+
+В memory-bound режиме $t_{\text{dec}} \propto W = N \cdot \text{bpw} / 8$.
+Соотношение времён:
+
+$$
+\frac{t_{\text{Q4}}}{t_{\text{FP16}}} = \frac{4.85}{16} \approx 0.30
+$$
+
+Decode ускоряется в $1/0.30 \approx 3.3\times$. Throughput соответственно
+вырастет в 3.3×. Это и есть главная причина, почему квантование —
+не «опциональная оптимизация», а стандартная практика для больших
+моделей.
+</details>
 
 ---
 
@@ -2544,6 +2788,91 @@ roofline:
 - Параметры всех этих движков в формуле эмулятора сводятся к
   ${(\alpha, \beta, \text{batch\_saturation}, \text{kv\_packing\_eff}, \text{compute\_path})}$
   плюс user-input $(\text{prefix\_cache\_hit}, \text{speculative}, \text{spec\_*})$.
+
+## Упражнения к Части 5
+
+**5.1.** vLLM с `prefix_cache_hit = 0.8`, $P_{\text{in}} = 2000$. Какое
+эффективное $P_{\text{in,eff}}$ для prefill compute-term? Во сколько
+раз ускорится prefill, если он был compute-bound? А если memory-bound?
+
+<details><summary>Решение</summary>
+
+$P_{\text{in,eff}} = P_{\text{in}} \cdot (1 - h) = 2000 \cdot 0.2 = 400$.
+
+Compute-term $t_{\text{pre,compute}} \propto P_{\text{in,eff}}$ — падает
+в $1/(1-h) = 5\times$.
+
+Memory-term $t_{\text{pre,mem}} = W / B$ — не меняется (веса всё равно
+читаются раз).
+
+Итоговое ускорение $t_{\text{pre}} = \max(\cdot, \cdot)$:
+- если prefill был compute-bound — ускорение ~5×;
+- если memory-bound — ускорение ~1× (т.е. почти ничего).
+
+Prefill compute-bound при больших $P_{\text{in}}$ и моделях ≤ ~30B;
+memory-bound при коротких промптах или очень больших моделях. APC
+полезнее всего для длинных system prompt'ов на средних моделях.
+</details>
+
+**5.2.** Speculative decoding с $r = 0.6$, $k = 4$, $\text{overhead} = 0.2$.
+Какое ускорение decode по сравнению с базовой схемой? Стоит ли его
+включать?
+
+<details><summary>Решение</summary>
+
+Формула из 5.2: $t_{\text{dec,spec}} = t_{\text{dec}} \cdot (1 + \text{overhead}) / (r \cdot k)$.
+
+Ускорение $= \frac{t_{\text{dec}}}{t_{\text{dec,spec}}} = \frac{r \cdot k}{1 + \text{overhead}} = \frac{0.6 \cdot 4}{1.2} = 2.0 \times$.
+
+Да, 2× ускорение — стоит включать. Однако: формула верна только для
+batch 1. При больших batch (4+) draft-модель становится bottleneck'ом
+и эффект быстро падает.
+</details>
+
+**5.3.** Какой движок брать для каждого сценария?
+
+(а) Chat-сервис с 100 параллельных пользователей на NVIDIA A100.
+(б) Локальный inference Llama-3 на MacBook M3.
+(в) Latency-critical bot на H100, готовы потратить ночь на компиляцию.
+(г) Агент с 5-уровневым reasoning и общими system prompt'ами.
+
+<details><summary>Решение</summary>
+
+(а) **vLLM** — стандарт для NVIDIA serving: PagedAttention +
+continuous batching + APC + optimal scheduling.
+
+(б) **llama.cpp** через Metal backend, или **MLX** (нативный для
+Apple Silicon).
+
+(в) **TensorRT-LLM** — AOT-компиляция даёт максимум на H100 с FP8.
+
+(г) **SGLang** — RadixAttention переиспользует KV для всех общих
+префиксов в reasoning-дереве. APC vLLM работала бы только для
+exact-match.
+</details>
+
+**5.4.** Сравните allocated memory для Llama-3.1-8B на контексте 8K,
+$b = 1$, FP16: с vLLM (`kv_packing_eff = 0.97`) vs PyTorch
+(`kv_packing_eff = 0.65`). Когда разница начнёт быть значимой?
+
+<details><summary>Решение</summary>
+
+Веса (общие): $W = 16 \text{ ГБ}$.
+
+KV per token (FP16, GQA): $128$ КБ. На 8K: $8192 \cdot 128 \text{ КБ} = 1.0 \text{ ГБ}$.
+
+PyTorch (eff=0.65): $1.0 / 0.65 = 1.54 \text{ ГБ}$ allocated.
+vLLM (eff=0.97): $1.0 / 0.97 = 1.03 \text{ ГБ}$ allocated.
+
+Total: PyTorch 17.5 ГБ, vLLM 17.0 ГБ. Разница 0.5 ГБ — несущественно
+при $b = 1$.
+
+Но при $b = 32$: KV-часть = $32 \text{ ГБ}$ (PyTorch) vs $1 / 0.97 \cdot 32 = 33 \text{ ГБ}$ (vLLM).
+PyTorch: $32 / 0.65 = 49.2 \text{ ГБ}$ KV. Разница уже **16 ГБ**, и
+PyTorch перестаёт помещаться в A100-80G (16 + 49 = 65 ГБ + overhead),
+а vLLM влезает с запасом (16 + 33 = 49 ГБ). Это и есть основной
+practical effect PagedAttention.
+</details>
 
 ---
 
