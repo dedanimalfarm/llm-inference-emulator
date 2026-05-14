@@ -20,6 +20,18 @@ HARDWARE_SPECS = {
         "memory_capacity_gb": 80.0,
         "tdp_w": 275,
     },
+    "1xH100": {
+        # NVIDIA H100 SXM5 80GB — Hopper. Dense (no-sparsity) tensor-core
+        # peaks: FP16/BF16 989, FP8 1979, INT8 1979 TFLOPS/TOPS. With 2×
+        # sparsity NVIDIA marketing doubles these (1979/3958 etc.); we use
+        # the dense numbers because real inference rarely exploits sparsity.
+        # HBM3 memory bandwidth 3.35 TB/s. PCIe variant is ~30% weaker
+        # (756 TFLOPS BF16, 2.0 TB/s) — use a separate entry if needed.
+        "peak_tflops": {16: 989.0, 8: 1979.0, 4: 1979.0},
+        "memory_bandwidth_gbs": 3350.0,
+        "memory_capacity_gb": 80.0,
+        "tdp_w": 700,
+    },
     "1xA10": {
         # NVIDIA A10 — Ampere (workstation)
         "peak_tflops": {16: 125.0, 8: 250.0, 4: 250.0},

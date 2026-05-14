@@ -103,11 +103,14 @@ BnB-4bit/8bit, GPTQ-4bit на нескольких NVIDIA-GPU и одной CPU-
 | 2.2a | 1× A100 | vLLM 0.6.3 AWQ | Qwen2.5-7B, P_in=1, P_out=2048, b=1 | 148 tok/s output | 219 tok/s output | +48% ✗ |
 | 2.2b | 1× A100 | vLLM 0.6.3 AWQ | Qwen2.5-7B, P_in=6144, P_out=2048, b=1 | 138 tok/s output | 219 tok/s output | +59% ✗ |
 | 2.3 | 1× RTX-5090 | vLLM AWQ | Qwen2.5-7B, P_in=1024, P_out=128, b=200 | 13 954 tok/s total | 13 827 tok/s total | **−0.9% ✓✓** |
+| 2.4a | 1× H100 | vLLM BF16 | Llama-3.1-8B, P_in=256, P_out=256, b=1 | TTFT 72 ms (mean) | TTFT 49.6 ms | −31% ✓ |
+| 2.4b | 1× H100 | vLLM BF16 (high concurrency) | Llama-3.1-8B, server stress | 12 500 tok/s total | ≤5 503 tok/s (b=64) | −56% ✗ |
 
-Self-consistency (§2.3) показывает ~1% точности **внутри откалиброванной
-области**. Extrapolation на A100 (§2.1, §2.2) — переоценка throughput
-на 50–60%, потому что `β = 0.65` (literature default для vLLM)
-завышено для A100 / batch=1 без откалиброванного значения.
+**Self-consistency** (§2.3) показывает ~1% точности **внутри откалиброванной
+области**. Extrapolation на A100/H100 (§2.1, §2.2, §2.4) — переоценка
+single-stream throughput на 50–60% (literature β=0.65) и недооценка
+high-concurrency throughput на H100 (`batch_saturation=(45, 7)` калиброван
+на RTX-5090, для H100 с FlashInfer асимптота выше).
 
 ### 2.1. Baseten — Mixtral 8x7B / TensorRT-LLM / A100
 
@@ -208,6 +211,50 @@ python3 scripts/cli.py --model 7 --bits 4 --hw 1xRTX-5090 --engine vllm \
     --p-in 1024 --p-out 128 --batch 200 --precision-label "AWQ.4bit"
 ```
 
+### 2.4. Morphllm — Llama-3.1-8B / vLLM / 1× H100
+
+**Источник:** [Morphllm vLLM benchmarks page](https://www.morphllm.com/vllm-benchmarks).
+
+**Заявленные числа:**
+- Llama-3.1-8B BF16, 1× H100 80GB, vLLM + FlashInfer, gpu_memory_utilization=0.8.
+- TTFT mean: **72 ms** (low concurrency), P99: **79 ms**.
+- Total throughput: **~12 500 tok/s** (server stress, high concurrency).
+
+**Результаты сверки** (2026-05-14):
+
+Два аспекта проверены отдельно — TTFT при batch=1 и общий throughput
+при server-стрессе.
+
+| Метрика | Real | Emulator | Δ | Комментарий |
+|---|---:|---:|---:|---|
+| TTFT (batch=1) | 72 ms | 49.6 ms | −31% | roofline-undershoot, ожидаемо |
+| Throughput @ b=8 | — | 3 256 tok/s | — | для chat-low concurrency |
+| Throughput @ b=64 | — | 5 503 tok/s | — | плато `batch_saturation=(45,7)` |
+| **Throughput high-c** | **12 500 tok/s** | **≤ 5 503** | **−56%** | calibration gap |
+
+**Диагноз gap'а:** `ENGINE_DEFAULTS["vllm"].batch_saturation = (45, 7)`
+калиброван на 2× RTX-5090 / Qwen-7B AWQ. На H100 с FlashInfer и более
+эффективным scheduler'ом реальный `batch_max` существенно выше — судя
+по Morphllm 12.5K tok/s, ~90+. Чтобы подогнать прогноз:
+
+- Текущее: `batch_saturation=(45, 7)` → max throughput 45 / t_dec
+- Нужно: `(92, 5)` → ~12 500 tok/s при той же t_dec ≈ 7.4 ms
+
+Эта точка валидирует **необходимость per-hardware калибровки
+`batch_saturation`**, а не только α/β. Похоже что для каждой пары
+`(hw, engine)` плато continuous batching различается заметно.
+
+Команды воспроизведения:
+```bash
+# TTFT comparison
+python3 scripts/cli.py --model 8 --bits 16 --hw 1xH100 --engine vllm \
+    --p-in 256 --p-out 256 --batch 1
+
+# Throughput plateau
+python3 scripts/cli.py --model 8 --bits 16 --hw 1xH100 --engine vllm \
+    --p-in 256 --p-out 256 --batch 64
+```
+
 ## 3. Источники архитектур (`ARCH_DEFAULTS`)
 
 Все записи в `emulator/formula.py::ARCH_DEFAULTS` взяты из публичных
@@ -249,7 +296,7 @@ production-datasheets:
 | RTX-5090 | [NVIDIA RTX 5090 product page](https://www.nvidia.com/en-us/geforce/graphics-cards/50-series/rtx-5090/) (Blackwell) |
 | A10 | [NVIDIA A10 datasheet](https://www.nvidia.com/en-us/data-center/a10-gpu/) |
 | A100 | [NVIDIA A100 datasheet](https://www.nvidia.com/en-us/data-center/a100/) |
-| H100 | [NVIDIA H100 datasheet](https://www.nvidia.com/en-us/data-center/h100/) |
+| H100 | [NVIDIA H100 datasheet](https://www.nvidia.com/en-us/data-center/h100/) — добавлен в `HARDWARE_SPECS["1xH100"]` 2026-05-14, SXM5 dense peaks (989 TFLOPS BF16, 1979 TFLOPS FP8, 3.35 TB/s) |
 
 `tp_efficiency` для multi-GPU конфигураций — эмпирически из §1.2 (для
 2× RTX-3090 PCIe без NVLink: `0.50`).
