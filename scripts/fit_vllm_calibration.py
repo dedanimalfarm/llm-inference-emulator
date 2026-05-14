@@ -48,6 +48,7 @@ def main():
             runs.append({
                 "model_tag": row["Model 🤗"],
                 "params_b": row["Params (B)"],
+                "active_b": row.get("Active (B)", row["Params (B)"]),
                 "tp": row["_tp"],
                 "batch": row["_n_batch"],
                 "tokens_per_second": row["Decode (tokens/s)"] * (row["_n_prompt"] + row["_n_gen"]) / row["_n_gen"]
@@ -60,7 +61,6 @@ def main():
             fname = os.path.basename(path).lower()
             m = pattern.match(fname)
             if not m: 
-                # maybe no batch tag in filename?
                 m_base = fname.replace(".json", "")
                 batch = 1
             else:
@@ -72,15 +72,22 @@ def main():
             if isinstance(d, list): d = d[0]
             
             params_b = 7.0 # default
-            if "70b" in m_base: params_b = 70.0
+            active_b = None
+            if "mixtral" in m_base:
+                params_b = 46.7
+                active_b = 12.9
+            elif "70b" in m_base: params_b = 70.0
             elif "32b" in m_base: params_b = 32.0
             elif "8b" in m_base: params_b = 8.0
             elif "1.5b" in m_base: params_b = 1.5
             elif "7b" in m_base: params_b = 7.0
+            
+            if active_b is None: active_b = params_b
 
             runs.append({
                 "model_tag": m_base,
                 "params_b": params_b,
+                "active_b": active_b,
                 "tp": 2 if "tp2" in m_base else 1,
                 "batch": batch,
                 "tokens_per_second": d["tokens_per_second"]
@@ -92,7 +99,7 @@ def main():
         groups.setdefault(key, []).append(r)
 
     print(f"Hardware: {args.hw} (Peak: {CARD_PEAK_TFLOPS} TFLOPS, BW: {CARD_MBW_GBS} GB/s)")
-    print(f"{'config':>22}  {'n':>2} {'asympt(t/s)':>11} {'half_pt':>7} {'alpha(eff)':>7} {'batch_max':>10}")
+    print(f"{'config':>22}  {'n':>2} {'asympt(t/s)':>11} {'half_pt':>7} {'alpha(eff)':>10} {'batch_max':>10}")
     print("-" * 85)
 
     for key in sorted(groups.keys()):
@@ -104,18 +111,18 @@ def main():
         A, H, err = fit_hill(batches, throughputs)
 
         rep = group[0]
-        N = rep["params_b"] * 1e9
+        N_active = rep["active_b"] * 1e9
         tp = rep["tp"]
         C_eff = CARD_PEAK_TFLOPS * 1e12 * tp
         MBW_eff = CARD_MBW_GBS * 1e9 * tp
-        W = N * 4.25 / 8.0 # AWQ 4.25 bits/param
+        W_active = N_active * 4.25 / 8.0 # AWQ 4.25 bits/param
         
-        alpha_eff = 2.0 * N * A / C_eff
+        alpha_eff = 2.0 * N_active * A / C_eff
         beta_assumed = 0.65
-        t_dec_mem = W / (MBW_eff * beta_assumed)
+        t_dec_mem = W_active / (MBW_eff * beta_assumed)
         batch_max = A * t_dec_mem
 
-        print(f"{key[0]:>22}  {len(group):>2} {A:>11.0f} {H:>7.2f} {alpha_eff:>7.3f} {batch_max:>10.1f}  sat=({batch_max:.1f}, {H:.1f})")
+        print(f"{key[0]:>22}  {len(group):>2} {A:>11.0f} {H:>7.2f} {alpha_eff:>10.3f} {batch_max:>10.1f}  sat=({batch_max:.1f}, {H:.1f})")
 
 if __name__ == "__main__":
     main()

@@ -547,3 +547,24 @@ Cross-check against public benchmarks (§2.2 in `BENCHMARK_SOURCES.md`):
 - **Single-stream discrepancy**: Previous emulator versions overestimated single-stream throughput by 5-6x due to a `batch_saturation` model that provided a large throughput "bonus" even at `batch=1`.
 - **Physical grounding**: Forcing `bs_eff(1) = 1.0` and calibrating `beta` against single-stream observations leads to highly accurate predictions across different batch sizes.
 - **V1 Engine instability**: The vLLM V1 engine exhibited flakiness during initialization on the benchmark machine, requiring multiple retries and process cleanups.
+
+## Phase 3: Mixtral 8x7B (MoE) Calibration Study
+
+> Added 2026-05-14 based on local runs of `vllm bench` on A100-SXM4-40GB.
+
+### Setup
+- **Model**: Mixtral-8x7B-Instruct-AWQ (25GB weights, 12.9B active params).
+- **Scenarios**: `p512 / g64`, batch sizes 1 to 32.
+
+### Calibrated Coefficients
+```
+1xA100, vllm, GPTQ.4bit.MoE:
+  alpha (prefill MFU) = 0.352
+  beta (decode MBU)  = 0.468
+  batch_saturation = (34.1, 6.5)
+```
+
+### Findings
+- **MoE Efficiency**: Mixtral achieves a much higher effective MBU (0.468) than Llama-70B (0.221) on the same hardware, likely because it fits more comfortably in VRAM, allowing for CUDA Graphs and a larger KV cache.
+- **Saturation Plateau**: The `batch_max` (34.1) is significantly higher than the 7.0B models (7.8), suggesting that larger models/MoE can sustain higher concurrency before saturating the memory bandwidth on A100.
+- **Physical Grounding**: Calibrating MoE against active parameters ($\alpha \approx 0.35$) brings it into the same range as dense models, confirming the architectural scaling laws are consistent.

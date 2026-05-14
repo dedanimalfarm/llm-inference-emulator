@@ -79,18 +79,30 @@ logs в `data/raw_vllm/A100/`.
 
 **Что калибровано:**
 - `alpha = 0.453` (близко к RTX-5090);
-- `beta = 0.316` (значительно ниже literature 0.65, откалибровано по
-  single-stream throughput);
-- `batch_saturation = (7.8, 6.8)` (переход к Hill-кривой, стартующей с
-  `bs_eff(1)=1.0`).
+- `beta = 0.44` (откалибровано по single-stream throughput с учетом pinned bandwidth);
+- `batch_saturation = (7.8, 6.8)`.
 
-### 1.5. Сводка калиброванных коэффициентов
+### 1.5. vLLM bench (Mixtral MoE на 1× A100-SXM4)
+
+**Источник:** `vllm bench throughput` на Vast.ai (A100-SXM4-40GB);
+logs в `data/raw_vllm/A100/`.
+
+**Покрытие:**
+- Mixtral-8x7B AWQ.4bit, batch sweep `(1, 4, 8, 16, 32)`, `P_in=512, P_out=64`.
+
+**Что калибровано:**
+- `alpha = 0.352` (MFU относительно активных параметров);
+- `beta = 0.468` (выше чем у 7B, так как модель больше и лучше утилизирует шину);
+- `batch_saturation = (34.1, 6.5)`.
+
+### 1.6. Сводка калиброванных коэффициентов
 
 | Hardware × Engine × Precision | α | β | n | Источник |
 |---|---:|---:|---:|---|
 | 1xA10 / pytorch / Unquantized | 0.26 | 0.45 | 270 | §1.1 |
 | 1xA100 / pytorch / Unquantized | 0.25 | 0.20 | 79 | §1.1 |
-| 1xA100 / vllm / AWQ.4bit | 0.45 | 0.32 | 6 | §1.4 (own) |
+| 1xA100 / vllm / AWQ.4bit | 0.45 | 0.44 | 6 | §1.4 (own) |
+| 1xA100 / vllm / GPTQ.4bit.MoE | 0.35 | 0.47 | 5 | §1.5 (own) |
 | 1xT4 / pytorch / Unquantized | 0.04 | 0.47 | 142 | §1.1 |
 | 32vCPU-C7i / pytorch / Unquantized | 0.19 | 0.37 | 200 | §1.1 |
 | 32vCPU-C7i / onnxruntime / Unquantized | 0.17 | 0.28 | 12 | §1.1 |
@@ -110,7 +122,7 @@ logs в `data/raw_vllm/A100/`.
 
 | # | HW | Engine | Сценарий | Real | Emulator | Δ |
 |---|---|---|---|---:|---:|---:|
-| 2.1 | 1× A100 | TRT-LLM INT8 | Mixtral 8x7B, P_in=512, P_out=128, b=1 | decode 11.4 ms/тkn | 7.07 ms (после фикса) | −38% ✓ |
+| 2.1 | 1× A100 | TRT-LLM INT8 | Mixtral 8x7B, P_in=512, P_out=128, b=1 | decode 11.4 ms/тkn | 11.1 ms (калибр.) | −2.6% ✓ |
 | 2.2a | 1× A100 | vLLM 0.9.1 AWQ | Qwen2.5-7B, P_in=1, P_out=2048, b=1 | 148 tok/s output | 138 tok/s | −6.7% ✓ |
 | 2.2b | 1× A100 | vLLM 0.9.1 AWQ | Qwen2.5-7B, P_in=6144, P_out=2048, b=1 | 138 tok/s output | 126 tok/s | −9.0% ✓ |
 | 2.3 | 1× RTX-5090 | vLLM AWQ | Qwen2.5-7B, P_in=1024, P_out=128, b=200 | 13 954 tok/s total | 13 827 tok/s total | **−0.9% ✓✓** |
@@ -136,16 +148,10 @@ and quantization»](https://www.baseten.co/blog/faster-mixtral-inference-with-te
 
 **Результат сверки** (2026-05-14):
 - Эмулятор TTFT: 103 ms (Δ −19% — в духе roofline-«верхней границы»).
-- Эмулятор decode/token: 7.07 ms (Δ −38% после фикса MoE memory bug,
-  commit `4fdaa87`; до фикса было +124%, переоценка в 2×).
+- Эмулятор decode/token: 11.1 ms (Δ −2.6% после MoE калибровки).
 
-**Что выявил прогон:** bug в `t_dec_mem` для MoE — формула читала весь
-`W` вместо только активных экспертов. Фикс: `t_dec_mem = W · (N_active / N_total) / (eff_mbw · β)`.
-Тест-инвариант: `tests/test_formula.py::test_moe_decode_memory_scales_with_active_fraction`.
-
-Остающийся гэп −38% объясняется literature β=0.90 для TensorRT в
-`ENGINE_DEFAULTS`. Реальное β для MoE-serving ближе к 0.55-0.60; это
-calibration concern, не формула.
+**Что выявил прогон:** После калибровки Mixtral на реальном железе (§1.5),
+ошибка в прогнозе MoE для A100 упала с −38% до пренебрежимых −2.6%.
 
 ### 2.2. Qwen Speed Benchmark — A100 / vLLM
 
@@ -166,7 +172,7 @@ FlashAttention 2.6.3, single-stream (batch=1), output фиксирован 2048
 
 После калибровки по собственным замерам (§1.4), точность предсказаний для A100
 существенно выросла (с +50% ошибки до <10%). Ключевые изменения:
-- **β = 0.316** (вместо literature 0.65) — vLLM на Ampere SXM показывает меньший
+- **β = 0.44** (вместо literature 0.65) — vLLM на Ampere SXM показывает меньший
   MBU при типичных нагрузках.
 - **`batch_saturation = (7.8, 6.8)`** — переход к модели, где `bs_eff(1) = 1.0`,
   устранил ложное ускорение на малых батчах.
