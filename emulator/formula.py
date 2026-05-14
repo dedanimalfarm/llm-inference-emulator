@@ -98,6 +98,7 @@ def predict(
     compute_path: int = 16,
     n_active_b: Optional[float] = None,
     head_dim: Optional[int] = None,
+    sliding_window: Optional[int] = None,
 ) -> InferenceResult:
     """Predict inference performance.
 
@@ -117,10 +118,15 @@ def predict(
               dense LLMs). MLA-style models (DeepSeek V3/V4) override
               with larger values (typically 512) reflecting compressed
               KV latents.
+    sliding_window: max number of tokens kept in the KV cache. If set,
+              both per-step KV read cost and total KV memory are capped
+              at this value. Defaults to None (unbounded) for classic
+              full attention; Mistral/Gemma/DeepSeek-V4 set 128–4096.
     """
     # Pull architectural defaults if not explicitly provided.
     arch_lookup_needed = (layers is None or d_model is None or
-                         n_active_b is None or head_dim is None)
+                         n_active_b is None or head_dim is None or
+                         sliding_window is None)
     if arch_lookup_needed:
         arch = _arch_for(n_params_b)
         layers = arch["layers"] if layers is None else layers
@@ -130,6 +136,8 @@ def predict(
             n_active_b = arch.get("n_active_b", n_params_b)
         if head_dim is None:
             head_dim = arch.get("head_dim", 128)
+        if sliding_window is None:
+            sliding_window = arch.get("sliding_window")  # may stay None
     if n_active_b is None:
         n_active_b = n_params_b
     if head_dim is None:
@@ -189,7 +197,12 @@ def predict(
 
     # ---- KV-cache cost averaged over the response ----
     # K and V can be stored at different precisions (e.g. llama.cpp -ctk Q8_0 -ctv Q4_0)
+    # Sliding-window attention (Mistral, Gemma, DeepSeek-V4) caps the KV
+    # cache at `sliding_window` tokens — past tokens are evicted and don't
+    # contribute to per-step read cost or to memory.
     avg_ctx = p_in + p_out / 2.0
+    if sliding_window is not None:
+        avg_ctx = min(avg_ctx, sliding_window)
 
     # KV bytes per token = layers * kv_heads * head_dim * 2 * bytes_per_element
     # (factor 2 for K and V, captured by (kv_bits_k + kv_bits_v)/8).
@@ -220,7 +233,11 @@ def predict(
     # Naive allocators reserve a worst-case KV buffer per request; PagedAttention
     # packs blocks tightly. kv_packing_eff = (used / allocated), so allocated =
     # actual_kv / kv_packing_eff. Default 1.0 keeps existing callers stable.
-    kv_total = kv_per_token_bytes * (p_in + p_out) * batch / kv_packing_eff
+    # Sliding window caps the per-request KV footprint at `sliding_window`.
+    ctx_kept = p_in + p_out
+    if sliding_window is not None:
+        ctx_kept = min(ctx_kept, sliding_window)
+    kv_total = kv_per_token_bytes * ctx_kept * batch / kv_packing_eff
 
     total_latency = t_pre + p_out * t_dec_final
     return InferenceResult(

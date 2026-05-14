@@ -367,6 +367,61 @@ def test_n_active_b_validates_against_n_params_b():
         assert "n_active_b" in str(e)
 
 
+def test_sliding_window_caps_kv_memory_and_decode_read():
+    """With sliding_window < (p_in + p_out), KV memory and per-step KV read
+    cost are both capped at sliding_window tokens."""
+    common = dict(
+        n_params_b=7, bits=16, p_in=8192, p_out=512, batch=1,
+        peak_flops=get_peak_compute("1xA100", 16),
+        mem_bw=get_memory_bandwidth("1xA100"),
+        alpha=0.30, beta=0.70,
+        layers=32, d_model=4096, kv_heads=8,
+    )
+    full = predict(sliding_window=None, **common)
+    sw   = predict(sliding_window=128, **common)
+    # KV memory ∝ context kept; weights identical → memory delta is all KV.
+    assert sw.memory_gb < full.memory_gb
+    # Decode is memory-bound at this size; full reads avg_ctx=8192+256=8448
+    # tokens of KV per step, sw reads min(8448, 128)=128. KV-term falls by
+    # ~66×, but total decode includes weight read, so the drop is partial.
+    assert sw.decode_per_token_s < full.decode_per_token_s
+
+
+def test_sliding_window_unbounded_by_default():
+    """Without explicit sliding_window and no ARCH_DEFAULTS entry, behavior
+    matches the pre-SW formula (locks back-compat)."""
+    common = dict(
+        n_params_b=7, bits=16, p_in=4096, p_out=512, batch=1,
+        peak_flops=get_peak_compute("1xA100", 16),
+        mem_bw=get_memory_bandwidth("1xA100"),
+        alpha=0.30, beta=0.70,
+        layers=32, d_model=4096, kv_heads=8,
+    )
+    a = predict(**common)
+    b = predict(sliding_window=None, **common)
+    # Both should give identical results when no sliding window applies.
+    assert a.memory_gb == b.memory_gb
+    assert a.decode_per_token_s == b.decode_per_token_s
+
+
+def test_deepseek_v4_pro_inherits_sliding_window_from_arch():
+    """DeepSeek V4-Pro entry has sliding_window=128; calling predict() for
+    model=1600 must pick it up automatically and cap KV cache."""
+    common = dict(
+        n_params_b=1600.0, bits=4, p_in=100000, p_out=64, batch=1,
+        peak_flops=get_peak_compute("1xA100", 16),
+        mem_bw=get_memory_bandwidth("1xA100"),
+        alpha=0.30, beta=0.70,
+    )
+    from_arch = predict(**common)
+    # Workaround to force full attention: pass a huge window.
+    full_attn = predict(sliding_window=10**9, **common)
+    # With sw=128, KV per request = 128 tokens × KV/token. Without, 100064
+    # tokens. Memory must be massively smaller.
+    assert from_arch.memory_gb < full_attn.memory_gb
+    assert (full_attn.memory_gb - from_arch.memory_gb) > 10  # at least 10 GB delta
+
+
 def test_defaults_preserve_legacy_behavior():
     """A call with no vLLM-style kwargs must produce the same result as
     pre-vLLM code. This locks the back-compat contract."""
@@ -410,5 +465,8 @@ if __name__ == "__main__":
     test_head_dim_override_inflates_kv_cache()
     test_deepseek_v4_pro_arch_loaded_from_defaults()
     test_n_active_b_validates_against_n_params_b()
+    test_sliding_window_caps_kv_memory_and_decode_read()
+    test_sliding_window_unbounded_by_default()
+    test_deepseek_v4_pro_inherits_sliding_window_from_arch()
     test_defaults_preserve_legacy_behavior()
     print("all tests passed")

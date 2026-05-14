@@ -55,6 +55,10 @@ def main():
     p.add_argument("--head-dim", type=int, default=None,
                    help="KV head dimension (default 128; use 512 for MLA models "
                         "like DeepSeek V3/V4).")
+    p.add_argument("--sliding-window", type=int, default=None,
+                   help="Max KV cache size in tokens. Caps both per-step KV "
+                        "read cost and total KV memory. Default: unbounded "
+                        "(full attention).")
     args = p.parse_args()
 
     eng = ENGINE_DEFAULTS[args.engine]
@@ -94,6 +98,7 @@ def main():
         tp_efficiency=HARDWARE_SPECS[args.hw].get("tp_efficiency", 1.0),
         n_active_b=args.active,
         head_dim=args.head_dim,
+        sliding_window=args.sliding_window,
     )
 
     # MoE: figure out the effective active count for the printout (CLI override > ARCH_DEFAULTS > dense).
