@@ -92,6 +92,9 @@ python scripts/demo.py
    формулы.
 4. [`docs/MANUAL_BENCHMARK.md`](docs/MANUAL_BENCHMARK.md) — как
    откалибровать собственный движок.
+5. [`docs/BENCHMARK_SOURCES.md`](docs/BENCHMARK_SOURCES.md) — каталог
+   всех использованных источников данных: для калибровки, для
+   валидации, архитектурные refs, методологические ссылки.
 
 ## What this gives you
 
@@ -389,8 +392,22 @@ results/
 
 ## Source data attribution
 
-The CSVs in `data/` are derived from
-[`optimum-benchmark/llm-perf-leaderboard`](https://huggingface.co/datasets/optimum-benchmark/llm-perf-leaderboard)
-via the [LLM-Perf Leaderboard](https://huggingface.co/spaces/optimum/llm-perf-leaderboard)
-processing pipeline. Snapshot reproduced in
+Полный каталог всех использованных источников — данные для калибровки,
+внешние бенчмарки для валидации, источники архитектур в `ARCH_DEFAULTS`,
+методологические ссылки — собран в [`docs/BENCHMARK_SOURCES.md`](docs/BENCHMARK_SOURCES.md).
+
+Краткая сводка:
+
+- **Calibration data**: [`optimum-benchmark/llm-perf-leaderboard`](https://huggingface.co/datasets/optimum-benchmark/llm-perf-leaderboard)
+  (PyTorch на A10/A100/T4/c7i), собственные `llama-bench` замеры на
+  RTX-3090, собственные `vllm bench` на 2× RTX-5090.
+- **Validation data**: [Baseten — Mixtral 8x7B / TRT-LLM / A100](https://www.baseten.co/blog/faster-mixtral-inference-with-tensorrt-llm-and-quantization/)
+  (нашёл MoE memory bug в decode-формуле, commit `4fdaa87`).
+- **Архитектура моделей**: model cards на Hugging Face,
+  config.json verbatim для DeepSeek-V3/V4.
+- **Методология**: Williams et al. (roofline), Kwon et al. (vLLM/PagedAttention),
+  Leviathan et al. (speculative decoding), Dao et al. (FlashAttention),
+  Vaswani et al. (transformer) и др.
+
+Снимок Leaderboard для воспроизводимости —
 [`dedanimalfarm/llm-perf-leaderboard-snapshot`](https://github.com/dedanimalfarm/llm-perf-leaderboard-snapshot).
