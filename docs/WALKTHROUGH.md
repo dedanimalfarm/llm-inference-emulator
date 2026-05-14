@@ -540,7 +540,7 @@ HARDWARE_SPECS хранит уже умноженные на N значения,
 │                              tp_size, tp_efficiency,           │
 │                              memory_capacity                   │
 │                                                                 │
-│  engines.py         ──────►  batch_mult, compute_path          │
+│  engines.py         ──────►  batch_saturation, compute_path    │
 │                                                                 │
 │  calibrated_coefs   ──────►  α, β  (median or p75)             │
 │  .csv                       (по hw × engine × precision)       │
@@ -600,6 +600,292 @@ HARDWARE_SPECS хранит уже умноженные на N значения,
 
 ---
 
+## vLLM-стиль оптимизации в формуле
+
+Базовый roofline из Слоёв 1-6 описывает «честный naive engine» — PyTorch
+eager, llama.cpp без батча. Современный inference-server (vLLM,
+TensorRT-LLM) выдаёт ×3-10 throughput на тех же GPU. Это не магия:
+четыре механизма, каждый со своим параметром в `predict()`, плюс
+несколько эффектов, которые сводятся к смещению калиброванных `α/β`.
+
+### TL;DR — что меняется в формуле
+
+| Что в vLLM | Где в формуле | Тип корректировки |
+|---|---|---|
+| Continuous batching | `t_pre`, `t_dec` через `bs_eff` | новый параметр `batch_saturation` |
+| Prefix caching (APC) | `t_pre` через `p_in_eff` | новый параметр `prefix_cache_hit` |
+| Speculative decoding | `t_dec_final` | флаг `speculative` + 3 параметра |
+| PagedAttention | `memory_GB` | новый параметр `kv_packing_eff` |
+| CUDA graphs | `α` на decode | калибровка, без новых параметров |
+| Chunked prefill | `α` | калибровка |
+| Marlin / Machete (INT4/8) | `α` для quantized | per-quant калибровка |
+| FlashAttention-3 | KV-term через `β` | калибровка |
+
+Первые четыре требуют новых параметров — этим мы займёмся ниже.
+Остальные — это «другая калибровка» для движка/квантизации и
+закрываются обычным замером `α/β` на нужном железе. Полный design doc
+с физикой каждой оптимизации — [`docs/VLLM_OPTIMIZATIONS.md`](VLLM_OPTIMIZATIONS.md).
+
+---
+
+### 1. Continuous batching → `batch_saturation`
+
+**Что делает.** В наивном «static batching» собрали N запросов,
+прогнали вместе, ждём пока последний закончит — самый медленный
+держит остальных. Continuous batching: планировщик на каждом
+decode-шаге может **взять новый запрос из очереди** в свободный slot.
+GPU никогда не простаивает между requests.
+
+**В формуле.** Эффективная concurrency — Hill-style saturation:
+
+```python
+bs_eff = batch_max * batch / (batch + batch_50pct)
+```
+
+При `batch == batch_50pct` получаем половину `batch_max`. При больших
+батчах асимптотически выходим на `batch_max`. `bs_eff` подставляется
+**и в `t_pre`, и в `t_dec` compute-term** — планировщик параллелит
+обе фазы.
+
+**Параметры из `engines.py`.** Для vLLM откалибровано на multi-batch
+sweep на 2× RTX 5090 / Qwen-7B AWQ:
+
+```python
+"vllm":      {"batch_saturation": (45, 7)}   # max=45, 50% at batch≈7
+"llama.cpp": {"batch_saturation": None}      # → bs_eff = batch
+"pytorch":   {"batch_saturation": None}
+```
+
+Для других размеров модели `batch_50pct` сильно меняется: 70B
+сатурируется уже при `batch ≈ 0.5`, 7B-TP2 — при `batch ≈ 20`
+(см. note в `engines.py`).
+
+---
+
+### 2. Prefix caching → `prefix_cache_hit`
+
+**Что делает.** Системные промпты, few-shot примеры, документы для RAG —
+часто **одни и те же** на серии запросов. vLLM хеширует префиксы
+(по блокам PagedAttention) и переиспользует уже посчитанный KV-кэш.
+
+**В формуле.** Доля префикса в кэше `h ∈ [0, 1]`:
+
+```python
+p_in_eff = p_in * (1.0 - prefix_cache_hit)
+t_pre_compute = 2 * N * p_in_eff * bs_eff / (eff_flops * α)
+t_pre_mem     = W / eff_mbw       # не меняется — веса всё равно читаем
+```
+
+Decode **не ускоряется** — он всё равно читает полный KV (каждый новый
+токен зависит от всего контекста). Падает только TTFT.
+
+**Типичные `h`:**
+- chat с system prompt 200 + user 50 → `h ≈ 0.8` для 2-го и следующих запросов
+- RAG с контекстом 1000 + user 100 → `h ≈ 0.91`
+- batch независимых документов → `h = 0.0`
+
+---
+
+### 3. Speculative decoding → `speculative` + 3 параметра
+
+**Что делает.** Маленькая «draft» модель (Llama-3.2-1B) предлагает `k`
+кандидатных токенов за дешёвый forward pass. Большая «main» модель
+(Llama-3.1-70B) проверяет все `k` за **один** forward pass через
+параллельное вычисление. Все приняты → за один шаг main выдаём `k`
+токенов; первый отвергнут → берём только тот, что main выдала бы сама.
+
+**В формуле.**
+
+```python
+if speculative:
+    accepted_per_step = spec_accept_rate * spec_k_proposed
+    t_dec_final = t_dec * (1 + spec_overhead) / accepted_per_step
+```
+
+**Типичные параметры:**
+- `spec_accept_rate = 0.7` (0.5-0.9 для размер-парных моделей)
+- `spec_k_proposed = 4` (стандарт vLLM)
+- `spec_overhead = 0.15` (draft в 5-10× меньше main)
+
+Llama-3.1-70B + Llama-3.2-1B / batch=1: ускорение decode в
+`(0.7 × 4) / 1.15 ≈ 2.4×`.
+
+**Когда ломается.** При больших батчах spec теряет эффект — draft
+становится бутылочным горлышком. Формула этого не моделирует:
+проверка корректности параметров остаётся на пользователе.
+
+Тесты-инварианты: `test_speculative_decoding_speeds_up_decode`
+(tests/test_formula.py:152), `test_speculative_zero_accept_rate_raises`
+(tests/test_formula.py:169).
+
+---
+
+### 4. PagedAttention → `kv_packing_eff`
+
+**Что делает.** KV-кэш разбивается на фиксированные блоки (типично
+16 токенов на блок). Память аллоцируется через таблицу страниц, как
+в виртуальной памяти ОС. Блоки разных запросов лежат рядом,
+фрагментация около нуля. Наивная аллокация резервирует worst-case
+буфер под каждый запрос → 50-65% утилизации VRAM; PagedAttention
+даёт 95-99%.
+
+**В формуле.**
+
+```python
+kv_total = kv_per_token_bytes * (p_in + p_out) * batch / kv_packing_eff
+```
+
+При `kv_packing_eff = 1.0` (default) — идеальная упаковка, нет
+оверхеда. При `0.65` — наивная аллокация, реально занятой памяти
+в ~1.5× больше расчётной.
+
+> ⚠️ **Гетча:** дефолт в `predict()` = `1.0`, и `engines.py` пока
+> **не подкладывает** значения для движков. Из коробки эффект
+> PagedAttention в memory-расчёте не учитывается — передавайте
+> `kv_packing_eff` явно (например, `0.97` для vLLM, `0.65` для
+> наивного PyTorch). См. design doc, секцию 1.
+
+**На скорость не влияет.** Меняет capacity — сколько concurrent
+requests умещается в VRAM. Поэтому косвенно бустит суммарную
+пропускную способность сервиса, но не одного пользователя.
+
+---
+
+### 5. Что НЕ требует новых параметров
+
+Эти оптимизации захватываются обычной калибровкой `α/β`:
+
+- **CUDA graphs** — убирают kernel-launch overhead (5-50 мкс × сотни
+  kernels на decode-шаг). Поднимают эффективный `α` на decode для
+  маленьких батчей.
+- **Chunked prefill** — длинный prefill режется на ~512-токенные
+  чанки и смешивается с decode-токенами других запросов. Более
+  стабильная latency и выше суммарный throughput; в формуле —
+  повышенный `α`.
+- **Marlin / Machete kernels** — прямой INT4/INT8 GEMM на упакованных
+  данных, без промежуточного dequant в fp16. +30-50% к prefill на
+  H100/Blackwell. Захватывается **per-quant** калибровкой `α`.
+- **FlashAttention-3** — асинхронные warp-specialization, поддержка
+  FP8. На длинных контекстах (32k+) ускоряет attention в 1.5-2×
+  vs FA2 → выше эффективный `β` через KV-term.
+
+Логика: новый движок / новое железо / новая квантизация → гоните
+бенчмарк и калибруйте `α/β`. Параметры формулы менять не нужно.
+
+---
+
+### Скорректированный поток одной картинкой
+
+```
+ВХОД (★ — новые vLLM-параметры):
+  n_params_b, bits, p_in, p_out, batch,
+  peak_flops, mem_bw, α, β,
+  layers, kv_heads, kv_bits_k, kv_bits_v,
+  tp_size, tp_efficiency,
+  ★ prefix_cache_hit          — h ∈ [0, 1]
+  ★ batch_saturation          — (batch_max, batch_50pct) или None
+  ★ kv_packing_eff            — PagedAttention eff (default 1.0)
+  ★ speculative, spec_*       — для draft+main
+
+ШАГ 1. Эффективные ресурсы:
+  W         = N · bits / 8
+  eff_flops = peak · tp_size · tp_efficiency
+  eff_mbw   = mbw  · tp_size · tp_efficiency
+
+ШАГ 2. ★ Effective concurrent batch:
+  bs_eff = batch_max · batch / (batch + batch_50pct)
+           if batch_saturation else batch
+
+ШАГ 3. Prefill (★ с префикс-кэшем):
+  p_in_eff = p_in · (1 − prefix_cache_hit)
+  t_pre = max(2·N·p_in_eff·bs_eff / (eff_flops·α),
+              W / eff_mbw)
+
+ШАГ 4. Decode базовый:
+  t_dec_base = max(W / (eff_mbw·β),  2·N·bs_eff / (eff_flops·α))
+
+ШАГ 5. KV-cache:
+  KV_per_tok = layers · kv_heads · 128 · (b_kv_k + b_kv_v) / 8
+  t_kv       = KV_per_tok · (p_in + p_out/2) / (eff_mbw · β)
+  t_dec      = t_dec_base + t_kv
+
+ШАГ 6. ★ Speculative decoding:
+  if speculative:
+      t_dec_final = t_dec · (1 + spec_overhead) /
+                    (spec_accept_rate · spec_k_proposed)
+  else:
+      t_dec_final = t_dec
+
+ШАГ 7. ★ Memory с PagedAttention:
+  kv_total  = KV_per_tok · (p_in + p_out) · batch / kv_packing_eff
+  memory_gb = (W + kv_total) / 1e9
+
+МЕТРИКИ:
+  latency    = t_pre + p_out · t_dec_final
+  throughput = bs_eff / t_dec_final
+```
+
+Отличия от baseline (Слой 3): новые шаги 2, 6, 7 и поправка `p_in_eff`
+в шаге 3. Остальное — ровно тот же roofline.
+
+---
+
+### Численный пример: 7B Q4 на 1× A100
+
+Сценарий: chat с system prompt, `p_in=1024, p_out=256, batch=8`.
+
+| Конфиг | TTFT | Throughput | Memory |
+|---|---:|---:|---:|
+| **PyTorch baseline** (α=0.20, β=0.55, batch_saturation=None, kv_pack=0.65) | 350 ms | 30 t/s | 8 GB |
+| **vLLM, без spec, h=0** (α=0.47, β=0.65, batch_saturation=(45, 7), kv_pack=0.97) | 175 ms | 110 t/s | 6 GB |
+| **+ prefix caching h=0.4** | **105 ms** | 110 t/s | 6 GB |
+| **+ speculative (r=0.7, k=4)** | 105 ms | **220 t/s** | 6 GB |
+
+Изолированные эффекты:
+- continuous batching → ×3.7 throughput (через `bs_eff`)
+- PagedAttention → −25% memory (capacity-bound сценарий)
+- prefix caching → −40% TTFT (для повторяющегося system prompt)
+- speculative → ×2 throughput на batch=1; на batch=8 эффект слабее
+
+Числа — literature defaults для иллюстрации эффектов. Реальная
+калибровка vLLM на 2× RTX 5090 / Qwen-7B AWQ даёт `α=0.47`,
+`batch_saturation=(45, 7)`; `β` пока literature.
+
+---
+
+### Связанные тесты
+
+- `test_prefix_cache_collapses_prefill_to_weight_load` — `tests/test_formula.py:111`
+- `test_prefix_cache_partial_hit_proportional` — `tests/test_formula.py:134`
+- `test_speculative_decoding_speeds_up_decode` — `tests/test_formula.py:152`
+- `test_speculative_zero_accept_rate_raises` — `tests/test_formula.py:169`
+
+---
+
+### Текущее состояние калибровки
+
+На 2026-05-14:
+
+- **vLLM α=0.47**, **`batch_saturation=(45, 7)`** — откалиброваны
+  на 2× RTX 5090 / Qwen-7B AWQ, multi-batch sweep
+  (commits 419bc50…c5daab1).
+- **vLLM β=0.65** — literature default. β из текущих vllm-замеров
+  **не идентифицируется**: prefill уходит в compute-bound, KV-term
+  слишком мал, чтобы отделить β от шума (см. commit 82341a6,
+  Variant A).
+- **`kv_packing_eff`** в `engines.py` не выставлен — передавайте
+  явно при сравнении PagedAttention vs наивной аллокации.
+- Все `spec_*` — пользовательский ввод, калибровать нечего.
+
+Полный design doc с обоснованием и Roadmap —
+[`docs/VLLM_OPTIMIZATIONS.md`](VLLM_OPTIMIZATIONS.md).
+Полная таблица калиброванных коэффициентов —
+[`results/calibrated_coefficients.csv`](../results/calibrated_coefficients.csv).
+Анализ калибровок и графики —
+[`results/REPORT.md`](../results/REPORT.md).
+
+---
+
 ## FAQ — частые вопросы
 
 ### Почему `predict(7B, hw=2xRTX-3090)` даёт ту же скорость что `predict(7B, hw=RTX-3090)`?
@@ -653,6 +939,14 @@ overhead, scheduler stalls, padding, неоптимальной cache locality. 
 
 Это ровно то, как vLLM/TensorRT добиваются высокого throughput — через
 большие батчи.
+
+### Чем отличается `predict()` для vLLM от наивного PyTorch?
+
+Четырьмя новыми параметрами: `batch_saturation` (continuous batching),
+`prefix_cache_hit` (APC), `speculative` + `spec_*` (speculative decoding)
+и `kv_packing_eff` (PagedAttention). Дефолты «как было» — старые вызовы
+работают без изменений. Полный разбор каждой оптимизации с примерами —
+раздел «vLLM-стиль оптимизации в формуле» выше.
 
 ---
 
