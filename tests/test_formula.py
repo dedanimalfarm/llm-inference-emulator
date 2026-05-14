@@ -282,6 +282,31 @@ def test_moe_uses_active_params_for_flops_not_total():
     assert 0.45 < ratio < 0.55, f"expected ~0.5 prefill ratio, got {ratio:.3f}"
 
 
+def test_moe_decode_memory_scales_with_active_fraction():
+    """MoE: per-step weight read at decode scales with N_active/N_total.
+    Mixtral 8x7B (12.9B / 46.7B ≈ 27.6%) should decode much faster than
+    a dense 46.7B model with identical arch — only routed experts cross
+    the HBM boundary at each token.
+    Validated against Baseten benchmark (Mixtral / TRT-LLM / A100 / INT8):
+    real decode ≈ 11.4 ms, emulator predicts ≈ 7 ms with literature β=0.9
+    (calibration gap remains, but the 2× MoE overestimate is gone)."""
+    common = dict(
+        bits=8, p_in=512, p_out=128, batch=1,
+        peak_flops=get_peak_compute("1xA100", 8),
+        mem_bw=get_memory_bandwidth("1xA100"),
+        alpha=0.55, beta=0.90,
+        layers=32, d_model=4096, kv_heads=8,
+    )
+    dense = predict(n_params_b=46.7, n_active_b=46.7, **common)
+    moe   = predict(n_params_b=46.7, n_active_b=12.9, **common)
+    # MoE decode must be much faster, roughly by the active fraction.
+    ratio = moe.decode_per_token_s / dense.decode_per_token_s
+    expected = 12.9 / 46.7
+    assert abs(ratio - expected) < 0.05, (
+        f"expected decode ratio ≈ {expected:.3f}, got {ratio:.3f}"
+    )
+
+
 def test_moe_memory_uses_total_params_not_active():
     """MoE: weight memory uses n_params_b (all experts in VRAM)."""
     common = dict(
@@ -460,6 +485,7 @@ if __name__ == "__main__":
     test_kv_packing_eff_inflates_memory_for_naive_allocator()
     test_engine_defaults_kv_packing_eff_wired()
     test_moe_uses_active_params_for_flops_not_total()
+    test_moe_decode_memory_scales_with_active_fraction()
     test_moe_memory_uses_total_params_not_active()
     test_arch_defaults_moe_entries_consistent()
     test_head_dim_override_inflates_kv_cache()

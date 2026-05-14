@@ -187,8 +187,13 @@ def predict(
     # ---- decode (single token, static base) ----
     # Memory term is independent of batch (weights read once per step).
     # Compute term scales with bs_eff (active concurrent requests per step).
-    # MoE: same N_active/W split as prefill.
-    t_dec_mem     = W / (eff_mbw * beta)
+    # MoE: per-step weight read scales with active fraction. At decode the
+    # router picks top-k experts per token, and only those expert weights
+    # cross the HBM boundary. Dense models have N_active==N → factor 1.
+    # Note: prefill is treated separately above; with P_in tokens routing
+    # is likely to touch every expert, so t_pre_mem keeps using full W.
+    weight_read_fraction = N_active / N
+    t_dec_mem     = W * weight_read_fraction / (eff_mbw * beta)
     t_dec_compute = 2.0 * N_active * bs_eff / (eff_flops * alpha)
     if t_dec_mem >= t_dec_compute:
         t_dec_base, b_dec = t_dec_mem, "memory"
