@@ -24,10 +24,13 @@ ENGINE_DEFAULTS = {
                      "kv_packing_eff": 0.97,
                      "notes": "PagedAttention + continuous batching + APC + Marlin AWQ. "
                               "α=0.47 calibrated on RTX 5090 / Qwen-7B AWQ. "
-                              "batch_saturation=(45, 7) calibrated from multi-batch sweep "
-                              "(half-saturation at batch≈7 for 7B; varies by model size — "
-                              "70B saturates at batch≈0.5, 7B-TP2 at batch≈20). "
-                              "kv_packing_eff=0.97 from PagedAttention paging (literature default)."},
+                              "batch_saturation=(45, 7) — RTX-5090-specific calibration. "
+                              "For A100/H100 always read calibrated_coefficients.csv: "
+                              "A100-40 ranges (3.8..7.8, 1.8..12.2) by model size. "
+                              "kv_packing_eff=0.97 from PagedAttention paging (literature default). "
+                              "WARNING: KV-FP8 on Ampere (A100) falls back from FlashAttention "
+                              "to XFormers — observed −50% throughput on A100-40GB Qwen-7B. "
+                              "Use FP16 KV unless VRAM-bound. Hopper (H100) supports FP8 KV natively."},
     "tensorrt":     {"alpha": 0.55, "beta": 0.90, "batch_saturation": (8, 2), "compute_path": 8,
                      "kv_packing_eff": 0.92,
                      "notes": "kernel fusion + INT8/FP8 on Hopper; paged KV allocator"},
