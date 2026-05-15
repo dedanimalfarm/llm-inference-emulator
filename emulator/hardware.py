@@ -28,6 +28,23 @@ HARDWARE_SPECS = {
         "memory_capacity_gb": 40.0,
         "tdp_w": 400,
     },
+    "1xA100-80": {
+        # NVIDIA A100 80GB SXM4 — Ampere
+        # Theoretical: 2039 GB/s. Observed (DLPerf): 1314.8 GB/s.
+        "peak_tflops": {16: 312.0, 8: 624.0, 4: 624.0},
+        "memory_bandwidth_gbs": 1314.8,
+        "memory_capacity_gb": 80.0,
+        "tdp_w": 400,
+    },
+    "2xA100-80": {
+        # 2× NVIDIA A100 80GB SXM4 — Ampere
+        "peak_tflops": {16: 624.0, 8: 1248.0, 4: 1248.0},
+        "memory_bandwidth_gbs": 4078.0,
+        "memory_capacity_gb": 160.0,
+        "tp_size": 2,
+        "tp_efficiency": 0.85, # placeholder
+        "tdp_w": 800,
+    },
     "1xH100": {
         # NVIDIA H100 SXM5 80GB — Hopper. Dense (no-sparsity) tensor-core
         # peaks: FP16/BF16 989, FP8 1979, INT8 1979 TFLOPS/TOPS. With 2×

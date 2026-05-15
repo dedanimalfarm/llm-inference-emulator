@@ -39,6 +39,8 @@ ARCH_DEFAULTS = {
     8.0:  {"layers": 32, "d_model": 4096, "kv_heads": 8},  # Llama-3.1-8B
     13.0: {"layers": 40, "d_model": 5120, "kv_heads": 40}, # Llama-2-13B (Full)
     14.0: {"layers": 48, "d_model": 5120, "kv_heads": 8},  # Qwen2.5-14B
+    30.7: {"layers": 60, "d_model": 5376, "kv_heads": 16,
+           "head_dim": 256, "sliding_window": 1024},           # Gemma 4 31B (hybrid attention)
     32.0: {"layers": 64, "d_model": 5120, "kv_heads": 8},  # Qwen3-32B (dense)
     34.0: {"layers": 48, "d_model": 7168, "kv_heads": 8},  # Yi-34B
     70.0: {"layers": 80, "d_model": 8192, "kv_heads": 8},  # Llama-3-70B
