@@ -1,4 +1,4 @@
-INFO 05-15 22:57:56 [__init__.py:244] Automatically detected platform cuda.
+INFO 05-15 23:42:21 [__init__.py:244] Automatically detected platform cuda.
 When dataset path is not set, it will default to random dataset
 [ERROR] `vision_output_dim` is part of Llama4VisionConfig.__init__'s signature, but not documented. Make sure to add it to the docstring of the function in /root/venv/lib/python3.12/site-packages/transformers/models/llama4/configuration_llama4.py.
 [ERROR] `pixel_shuffle_ratio` is part of Llama4VisionConfig.__init__'s signature, but not documented. Make sure to add it to the docstring of the function in /root/venv/lib/python3.12/site-packages/transformers/models/llama4/configuration_llama4.py.
@@ -18,114 +18,113 @@ When dataset path is not set, it will default to random dataset
 [ERROR] `eoi_token_index` is part of Llama4Config.__init__'s signature, but not documented. Make sure to add it to the docstring of the function in /root/venv/lib/python3.12/site-packages/transformers/models/llama4/configuration_llama4.py.
 [transformers] `rope_parameters`'s high_freq_factor field must be greater than low_freq_factor, got high_freq_factor=1.0 and low_freq_factor=1.0
 [transformers] `rope_parameters`'s high_freq_factor field must be greater than low_freq_factor, got high_freq_factor=1.0 and low_freq_factor=1.0
-INFO 05-15 22:58:03 [datasets.py:348] Sampling input_len from [1023, 1023] and output_len from [128, 128]
-Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+INFO 05-15 23:42:28 [datasets.py:348] Sampling input_len from [1023, 1023] and output_len from [128, 128]
 [transformers] `rope_parameters`'s high_freq_factor field must be greater than low_freq_factor, got high_freq_factor=1.0 and low_freq_factor=1.0
 [transformers] `rope_parameters`'s high_freq_factor field must be greater than low_freq_factor, got high_freq_factor=1.0 and low_freq_factor=1.0
-INFO 05-15 22:58:12 [config.py:823] This model supports multiple tasks: {'score', 'generate', 'classify', 'reward', 'embed'}. Defaulting to 'generate'.
+INFO 05-15 23:42:37 [config.py:823] This model supports multiple tasks: {'classify', 'generate', 'reward', 'score', 'embed'}. Defaulting to 'generate'.
 [transformers] `torch_dtype` is deprecated! Use `dtype` instead!
-INFO 05-15 22:58:12 [awq_marlin.py:116] The model is convertible to awq_marlin during runtime. Using awq_marlin kernel.
-INFO 05-15 22:58:12 [llm_engine.py:230] Initializing a V0 LLM engine (v0.9.1) with config: model='kishizaki-sci/Llama-4-Scout-17B-16E-Instruct-AWQ', speculative_config=None, tokenizer='kishizaki-sci/Llama-4-Scout-17B-16E-Instruct-AWQ', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config={}, tokenizer_revision=None, trust_remote_code=True, dtype=torch.float16, max_seq_len=16384, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=awq_marlin, enforce_eager=False, kv_cache_dtype=auto,  device_config=cuda, decoding_config=DecodingConfig(backend='xgrammar', disable_fallback=False, disable_any_whitespace=False, disable_additional_properties=False, reasoning_backend=''), observability_config=ObservabilityConfig(show_hidden_metrics_for_version=None, otlp_traces_endpoint=None, collect_detailed_traces=None), seed=0, served_model_name=kishizaki-sci/Llama-4-Scout-17B-16E-Instruct-AWQ, num_scheduler_steps=1, multi_step_stream_outputs=True, enable_prefix_caching=None, chunked_prefill_enabled=False, use_async_output_proc=True, pooler_config=None, compilation_config={"level":0,"debug_dump_path":"","cache_dir":"","backend":"","custom_ops":[],"splitting_ops":[],"use_inductor":true,"compile_sizes":[],"inductor_compile_config":{"enable_auto_functionalized_v2":false},"inductor_passes":{},"use_cudagraph":false,"cudagraph_num_of_warmups":0,"cudagraph_capture_sizes":[256,248,240,232,224,216,208,200,192,184,176,168,160,152,144,136,128,120,112,104,96,88,80,72,64,56,48,40,32,24,16,8,4,2,1],"cudagraph_copy_inputs":false,"full_cuda_graph":false,"max_capture_size":256,"local_cache_dir":null}, use_cached_outputs=False, 
+INFO 05-15 23:42:37 [awq_marlin.py:116] The model is convertible to awq_marlin during runtime. Using awq_marlin kernel.
+INFO 05-15 23:42:37 [llm_engine.py:230] Initializing a V0 LLM engine (v0.9.1) with config: model='kishizaki-sci/Llama-4-Scout-17B-16E-Instruct-AWQ', speculative_config=None, tokenizer='kishizaki-sci/Llama-4-Scout-17B-16E-Instruct-AWQ', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config={}, tokenizer_revision=None, trust_remote_code=True, dtype=torch.float16, max_seq_len=16384, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=awq_marlin, enforce_eager=False, kv_cache_dtype=auto,  device_config=cuda, decoding_config=DecodingConfig(backend='xgrammar', disable_fallback=False, disable_any_whitespace=False, disable_additional_properties=False, reasoning_backend=''), observability_config=ObservabilityConfig(show_hidden_metrics_for_version=None, otlp_traces_endpoint=None, collect_detailed_traces=None), seed=0, served_model_name=kishizaki-sci/Llama-4-Scout-17B-16E-Instruct-AWQ, num_scheduler_steps=1, multi_step_stream_outputs=True, enable_prefix_caching=None, chunked_prefill_enabled=False, use_async_output_proc=True, pooler_config=None, compilation_config={"level":0,"debug_dump_path":"","cache_dir":"","backend":"","custom_ops":[],"splitting_ops":[],"use_inductor":true,"compile_sizes":[],"inductor_compile_config":{"enable_auto_functionalized_v2":false},"inductor_passes":{},"use_cudagraph":false,"cudagraph_num_of_warmups":0,"cudagraph_capture_sizes":[256,248,240,232,224,216,208,200,192,184,176,168,160,152,144,136,128,120,112,104,96,88,80,72,64,56,48,40,32,24,16,8,4,2,1],"cudagraph_copy_inputs":false,"full_cuda_graph":false,"max_capture_size":256,"local_cache_dir":null}, use_cached_outputs=False, 
 [transformers] `rope_parameters`'s high_freq_factor field must be greater than low_freq_factor, got high_freq_factor=1.0 and low_freq_factor=1.0
 [transformers] `rope_parameters`'s high_freq_factor field must be greater than low_freq_factor, got high_freq_factor=1.0 and low_freq_factor=1.0
 [transformers] The following generation flags are not valid and may be ignored: ['cache_implementation']. Set `TRANSFORMERS_VERBOSITY=info` for more details.
-INFO 05-15 22:58:14 [cuda.py:327] Using Flash Attention backend.
-INFO 05-15 22:58:15 [parallel_state.py:1065] rank 0 in world size 1 is assigned as DP rank 0, PP rank 0, TP rank 0, EP rank 0
-INFO 05-15 22:58:15 [model_runner.py:1171] Starting to load model kishizaki-sci/Llama-4-Scout-17B-16E-Instruct-AWQ...
+INFO 05-15 23:42:40 [cuda.py:327] Using Flash Attention backend.
+INFO 05-15 23:42:41 [parallel_state.py:1065] rank 0 in world size 1 is assigned as DP rank 0, PP rank 0, TP rank 0, EP rank 0
+INFO 05-15 23:42:41 [model_runner.py:1171] Starting to load model kishizaki-sci/Llama-4-Scout-17B-16E-Instruct-AWQ...
 [transformers] Accessing `__path__` from `.models.llama4.image_processing_llama4`. Returning `__path__` instead. Behavior may be different and this alias will be removed in future versions.
 [transformers] Accessing `find_supported_resolutions` from `.models.llama4.image_processing_llama4`. Returning `find_supported_resolutions` instead. Behavior may be different and this alias will be removed in future versions.
 [transformers] Accessing `get_best_fit` from `.models.llama4.image_processing_llama4`. Returning `get_best_fit` instead. Behavior may be different and this alias will be removed in future versions.
-INFO 05-15 22:58:15 [cuda.py:301] Cannot use FlashAttention-2 backend for head size 88.
-INFO 05-15 22:58:15 [cuda.py:324] Using XFormers backend.
-WARNING 05-15 22:58:16 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.0.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-WARNING 05-15 22:58:16 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.1.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-WARNING 05-15 22:58:16 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.2.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.3.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-WARNING 05-15 22:58:16 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.4.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-WARNING 05-15 22:58:16 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.5.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-WARNING 05-15 22:58:16 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.6.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.7.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-WARNING 05-15 22:58:16 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.8.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-WARNING 05-15 22:58:16 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.9.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-WARNING 05-15 22:58:16 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.10.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.11.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-WARNING 05-15 22:58:16 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.12.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-WARNING 05-15 22:58:16 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.13.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-WARNING 05-15 22:58:16 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.14.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.15.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-WARNING 05-15 22:58:16 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.16.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-WARNING 05-15 22:58:16 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.17.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-WARNING 05-15 22:58:16 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.18.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.19.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-WARNING 05-15 22:58:16 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.20.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-WARNING 05-15 22:58:16 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.21.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-WARNING 05-15 22:58:16 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.22.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.23.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-WARNING 05-15 22:58:16 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.24.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-WARNING 05-15 22:58:16 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.25.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-WARNING 05-15 22:58:16 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.26.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.27.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-WARNING 05-15 22:58:16 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.28.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-WARNING 05-15 22:58:16 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.29.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-WARNING 05-15 22:58:16 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.30.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.31.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-WARNING 05-15 22:58:16 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.32.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-WARNING 05-15 22:58:16 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.33.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-WARNING 05-15 22:58:16 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.34.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.35.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-WARNING 05-15 22:58:16 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.36.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-WARNING 05-15 22:58:16 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.37.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-WARNING 05-15 22:58:16 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.38.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.39.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-WARNING 05-15 22:58:16 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.40.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-WARNING 05-15 22:58:16 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.41.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-WARNING 05-15 22:58:16 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.42.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.43.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-WARNING 05-15 22:58:16 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.44.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-WARNING 05-15 22:58:16 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.45.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-WARNING 05-15 22:58:16 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.46.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-WARNING 05-15 22:58:16 [awq_marlin.py:145] Layer 'language_model.model.layers.47.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
-INFO 05-15 22:58:17 [weight_utils.py:292] Using model weights format ['*.safetensors']
+INFO 05-15 23:42:41 [cuda.py:301] Cannot use FlashAttention-2 backend for head size 88.
+INFO 05-15 23:42:41 [cuda.py:324] Using XFormers backend.
+WARNING 05-15 23:42:42 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.0.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+WARNING 05-15 23:42:42 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.1.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+WARNING 05-15 23:42:42 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.2.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.3.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+WARNING 05-15 23:42:42 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.4.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+WARNING 05-15 23:42:42 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.5.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+WARNING 05-15 23:42:42 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.6.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.7.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+WARNING 05-15 23:42:42 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.8.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+WARNING 05-15 23:42:42 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.9.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+WARNING 05-15 23:42:42 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.10.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.11.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+WARNING 05-15 23:42:42 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.12.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+WARNING 05-15 23:42:42 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.13.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+WARNING 05-15 23:42:42 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.14.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.15.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+WARNING 05-15 23:42:42 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.16.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+WARNING 05-15 23:42:42 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.17.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+WARNING 05-15 23:42:42 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.18.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.19.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+WARNING 05-15 23:42:42 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.20.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+WARNING 05-15 23:42:42 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.21.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+WARNING 05-15 23:42:42 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.22.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.23.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+WARNING 05-15 23:42:42 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.24.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+WARNING 05-15 23:42:42 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.25.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+WARNING 05-15 23:42:42 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.26.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.27.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+WARNING 05-15 23:42:42 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.28.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+WARNING 05-15 23:42:42 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.29.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+WARNING 05-15 23:42:42 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.30.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.31.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+WARNING 05-15 23:42:42 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.32.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+WARNING 05-15 23:42:42 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.33.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+WARNING 05-15 23:42:42 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.34.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.35.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+WARNING 05-15 23:42:42 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.36.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+WARNING 05-15 23:42:42 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.37.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+WARNING 05-15 23:42:42 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.38.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.39.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+WARNING 05-15 23:42:42 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.40.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+WARNING 05-15 23:42:42 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.41.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+WARNING 05-15 23:42:42 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.42.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.43.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+WARNING 05-15 23:42:42 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.44.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+WARNING 05-15 23:42:42 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.45.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+WARNING 05-15 23:42:42 [flash_attn.py:630] Using irope in V0 is not supported yet, it will fall back to global attention for long context.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.46.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+WARNING 05-15 23:42:42 [awq_marlin.py:145] Layer 'language_model.model.layers.47.feed_forward.experts' is not supported by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+INFO 05-15 23:42:42 [weight_utils.py:292] Using model weights format ['*.safetensors']
 Loading safetensors checkpoint shards:   0% Completed | 0/13 [00:00<?, ?it/s]
-Loading safetensors checkpoint shards:  38% Completed | 5/13 [00:00<00:00, 42.30it/s]
-Loading safetensors checkpoint shards:  77% Completed | 10/13 [00:00<00:00, 44.50it/s]
-Loading safetensors checkpoint shards: 100% Completed | 13/13 [00:00<00:00, 47.17it/s]
+Loading safetensors checkpoint shards:  31% Completed | 4/13 [00:00<00:00, 38.24it/s]
+Loading safetensors checkpoint shards:  69% Completed | 9/13 [00:00<00:00, 44.33it/s]
+Loading safetensors checkpoint shards: 100% Completed | 13/13 [00:00<00:00, 47.12it/s]
 
 [rank0]: Traceback (most recent call last):
 [rank0]:   File "/root/venv/bin/vllm", line 6, in <module>
@@ -202,4 +201,4 @@ INFO 05-15 22:58:17 [weight_utils.py:292] Using model weights format ['*.safeten
 [rank0]:     param = params_dict[name]
 [rank0]:             ~~~~~~~~~~~^^^^^^
 [rank0]: KeyError: 'layers.1.feed_forward.experts.0.activation_fn.scales'
-[rank0]:[W515 22:58:18.950663332 ProcessGroupNCCL.cpp:1476] Warning: WARNING: destroy_process_group() was not called before program exit, which can leak resources. For more info, please see https://pytorch.org/docs/stable/distributed.html#shutdown (function operator())
+[rank0]:[W515 23:42:44.279976732 ProcessGroupNCCL.cpp:1476] Warning: WARNING: destroy_process_group() was not called before program exit, which can leak resources. For more info, please see https://pytorch.org/docs/stable/distributed.html#shutdown (function operator())
