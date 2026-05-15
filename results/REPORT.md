@@ -515,10 +515,11 @@ hardware sizing, and sanity-checking real benchmark results.
 
 ## A100 vLLM Calibration Study
 
-> Added 2026-05-14 based on local runs of `vllm bench` on A100-SXM4-40GB.
+> Initial calibration: 2026-05-14 (`vllm bench` on A100-SXM4-40GB).
+> Refit on output-only throughput: 2026-05-15 (commit `af99623`).
 
 ### Setup
-- **Hardware**: 1× NVIDIA A100-SXM4-40GB (1555 GB/s, 312 TFLOPS).
+- **Hardware**: 1× NVIDIA A100-SXM4-40GB (peak 1555 GB/s, observed DLPerf 1314.8 GB/s, 312 TFLOPS).
 - **Engine**: `vLLM` 0.9.1 (V1 engine with `torch.compile`).
 - **Model**: Qwen-2.5-7B-AWQ (4.25 bits/param).
 - **Scenarios**: `p1024 / g128`, batch sizes 1 to 500.
@@ -527,9 +528,9 @@ hardware sizing, and sanity-checking real benchmark results.
 The following coefficients were derived from a multi-batch sweep:
 
 ```
-1xA100, vllm, AWQ.4bit:
+1xA100-40, vllm, AWQ.4bit:
   alpha (prefill MFU) = 0.453
-  beta (decode MBU)  = 0.316
+  beta (decode MBU)  = 0.44
   batch_saturation = (7.8, 6.8)
   n_rows = 6
 ```
@@ -544,13 +545,13 @@ Cross-check against public benchmarks (§2.2 in `BENCHMARK_SOURCES.md`):
   - Predicted: 125.6 tok/s (-9.0% error)
 
 ### Findings
-- **Single-stream discrepancy**: Previous emulator versions overestimated single-stream throughput by 5-6x due to a `batch_saturation` model that provided a large throughput "bonus" even at `batch=1`.
-- **Physical grounding**: Forcing `bs_eff(1) = 1.0` and calibrating `beta` against single-stream observations leads to highly accurate predictions across different batch sizes.
+- **Single-stream discrepancy**: Previous emulator versions overestimated single-stream throughput by 5-6x due to a `batch_saturation` model that provided a large throughput "bonus" even at `batch=1`. The fix in commit `af99623` clips the Hill curve to the queue depth: `bs_eff = min(batch, max(min(1, batch), hill))`. Now `bs_eff(1) = 1.0` always.
+- **Fitter target was wrong**: Pre-`af99623` the fitter optimised against `tokens_per_second` (aggregate prefill+decode from vLLM bench JSON), but the formula's `bs_eff` controls decode-only throughput. With short P_out the aggregate inflated `batch_max` by ~8×. Fitter rewritten to consume `batch · P_out / elapsed`.
 - **V1 Engine instability**: The vLLM V1 engine exhibited flakiness during initialization on the benchmark machine, requiring multiple retries and process cleanups.
 
 ## Phase 3: Mixtral 8x7B (MoE) Calibration Study
 
-> Added 2026-05-14 based on local runs of `vllm bench` on A100-SXM4-40GB.
+> Added 2026-05-14, batch_saturation refit 2026-05-15 (commit `af99623`).
 
 ### Setup
 - **Model**: Mixtral-8x7B-Instruct-AWQ (25GB weights, 12.9B active params).
@@ -558,13 +559,48 @@ Cross-check against public benchmarks (§2.2 in `BENCHMARK_SOURCES.md`):
 
 ### Calibrated Coefficients
 ```
-1xA100, vllm, GPTQ.4bit.MoE:
+1xA100-40, vllm, GPTQ.4bit.MoE:
   alpha (prefill MFU) = 0.352
   beta (decode MBU)  = 0.468
-  batch_saturation = (34.1, 6.5)
+  batch_saturation = (5.8, 12.2)    ← refit on output-only throughput
 ```
 
 ### Findings
 - **MoE Efficiency**: Mixtral achieves a much higher effective MBU (0.468) than Llama-70B (0.221) on the same hardware, likely because it fits more comfortably in VRAM, allowing for CUDA Graphs and a larger KV cache.
-- **Saturation Plateau**: The `batch_max` (34.1) is significantly higher than the 7.0B models (7.8), suggesting that larger models/MoE can sustain higher concurrency before saturating the memory bandwidth on A100.
+- **Saturation Plateau (refit)**: Real output asymptote is ~500-550 t/s at b=32 (not 4250 t/s aggregate). With `t_dec ≈ 10.6 ms` that gives `batch_max ≈ 5.8`, half-saturation at `batch ≈ 12`. Pre-refit value `(34.1, 6.5)` was an artefact of fitting aggregate throughput on short-P_out data.
+- **Cross-check after refit (output throughput vs real bench)**:
+  - b=1: real 90, emu 94 (+5%)
+  - b=8: real 247, emu 217 (−12%)
+  - b=32: real 404, emu 396 (−2%)
 - **Physical Grounding**: Calibrating MoE against active parameters ($\alpha \approx 0.35$) brings it into the same range as dense models, confirming the architectural scaling laws are consistent.
+
+## Phase 4: Llama-3.1-70B (Dense Large) Calibration Study
+
+> Added 2026-05-14, batch_saturation refit 2026-05-15 (commit `af99623`).
+
+### Setup
+- **Model**: Llama-3.1-70B-Instruct-GPTQ-INT4 (~35 GiB weights).
+- **Scenarios**: `p256 / g64`, batch sizes 1 to 16 with `--enforce-eager`.
+- **VRAM Constraint**: 40 GB - 35 GB weights leaves only 0.55 GB for KV cache
+  (~1800 tokens total), forcing aggressive preemption from batch 8.
+
+### Calibrated Coefficients
+```
+1xA100-40, vllm, GPTQ.4bit:
+  alpha (prefill MFU) = 0.221    ← artefact of eager mode + preemption
+  beta (decode MBU)  = 0.67
+  batch_saturation = (3.8, 1.8)  ← refit on output-only throughput
+```
+
+⚠️ **The 70B α=0.221 is NOT a clean calibration — it reflects the 40GB
+constraint, not the model's intrinsic MFU on A100.** Reasons:
+- `--enforce-eager` (CUDA-graphs disabled, ~33% throughput penalty)
+- Heavy preemption from batch 8 onwards due to 0.55 GB KV budget
+
+On a 80GB instance without eager mode we expect α ≈ 0.40-0.50 (in line
+with Qwen-7B AWQ). This recalibration is queued for step 6.
+
+### Cross-check after refit (output throughput vs real bench)
+- b=1: real 23, emu 25 (+9%)
+- b=4: real 74, emu 66 (−11%)
+- b=16: real 84, emu 86 (+2%)

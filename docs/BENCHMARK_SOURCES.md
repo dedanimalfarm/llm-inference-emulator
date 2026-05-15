@@ -68,32 +68,44 @@ BnB-4bit/8bit, GPTQ-4bit на нескольких NVIDIA-GPU и одной CPU-
 `beta=0.65` оставлен как literature default — из текущих vLLM-замеров
 не идентифицируется (см. commit `82341a6`, Variant A).
 
-### 1.4. vLLM bench (собственные замеры на 1× A100-SXM4)
+### 1.4. vLLM bench (собственные замеры на 1× A100-SXM4-40GB)
+
+**Источник:** `vllm bench throughput` на Vast.ai (A100-SXM4-40GB);
+logs в `data/raw_vllm/A100/`. Pinned instance bandwidth: 1314.8 GB/s (DLPerf).
+
+**Покрытие:**
+- Qwen-7B AWQ.4bit, batch sweep `(1, 8, 32, 100, 200, 500)`, `P_in=1024, P_out=128`.
+- Llama-3.1-70B GPTQ.4bit, batch sweep `(1, 2, 4, 8, 16)`, `P_in=256, P_out=64`,
+  `--enforce-eager` (forced due to 40GB VRAM limit — leaves only 0.55 GB for KV).
+
+**Что калибровано:**
+
+| precision_label | α | β | batch_saturation | notes |
+|---|---:|---:|---|---|
+| `AWQ.4bit` (Qwen-7B) | 0.453 | 0.44 | (7.8, 6.8) | clean fit, +/-16% output throughput |
+| `GPTQ.4bit` (Llama-70B) | 0.221 | 0.67 | (3.8, 1.8) | **artefact of 40GB**: eager-mode penalty (~33%) + preemption from b=8. Real α expected ~0.45 on 80GB |
+
+⚠️ Pre-refit history: `(7.8, 6.8)` and `(3.8, 1.8)` were *not* what the
+Hill-curve fitter originally returned. In commit `af99623` the fitter was
+rewritten to fit *output-only* throughput (was fitting aggregate
+prefill+decode → 8× overestimate of `batch_max` for short-P_out sweeps).
+Pre-fix Llama-70B saturation was `(21.5, 2.5)` → single-stream throughput
+overestimated +570%.
+
+### 1.5. vLLM bench (Mixtral MoE на 1× A100-SXM4-40GB)
 
 **Источник:** `vllm bench throughput` на Vast.ai (A100-SXM4-40GB);
 logs в `data/raw_vllm/A100/`.
 
 **Покрытие:**
-- Qwen-7B AWQ.4bit, batch sweep `(1, 8, 32, 100, 200, 500)`,
-  `P_in=1024, P_out=128`.
+- Mixtral-8x7B AWQ.4bit (engine label `GPTQ.4bit.MoE`), batch sweep
+  `(1, 4, 8, 16, 32)`, `P_in=512, P_out=64`.
 
 **Что калибровано:**
-- `alpha = 0.453` (близко к RTX-5090);
-- `beta = 0.44` (откалибровано по single-stream throughput с учетом pinned bandwidth);
-- `batch_saturation = (7.8, 6.8)`.
-
-### 1.5. vLLM bench (Mixtral MoE на 1× A100-SXM4)
-
-**Источник:** `vllm bench throughput` на Vast.ai (A100-SXM4-40GB);
-logs в `data/raw_vllm/A100/`.
-
-**Покрытие:**
-- Mixtral-8x7B AWQ.4bit, batch sweep `(1, 4, 8, 16, 32)`, `P_in=512, P_out=64`.
-
-**Что калибровано:**
-- `alpha = 0.352` (MFU относительно активных параметров);
+- `alpha = 0.352` (MFU относительно активных параметров, 12.9B);
 - `beta = 0.468` (выше чем у 7B, так как модель больше и лучше утилизирует шину);
-- `batch_saturation = (34.1, 6.5)`.
+- `batch_saturation = (5.8, 12.2)` — обновлено после refit фитера (`af99623`).
+  Pre-refit было `(34.1, 6.5)` (overestimate в 6×, single-stream err +379%).
 
 ### 1.6. Сводка калиброванных коэффициентов
 
@@ -101,8 +113,9 @@ logs в `data/raw_vllm/A100/`.
 |---|---:|---:|---:|---|
 | 1xA10 / pytorch / Unquantized | 0.26 | 0.45 | 270 | §1.1 |
 | 1xA100 / pytorch / Unquantized | 0.25 | 0.20 | 79 | §1.1 |
-| 1xA100 / vllm / AWQ.4bit | 0.45 | 0.44 | 6 | §1.4 (own) |
-| 1xA100 / vllm / GPTQ.4bit.MoE | 0.35 | 0.47 | 5 | §1.5 (own) |
+| 1xA100-40 / vllm / AWQ.4bit | 0.45 | 0.44 | 6 | §1.4 (own); sat=(7.8, 6.8) |
+| 1xA100-40 / vllm / GPTQ.4bit | 0.22 | 0.67 | 5 | §1.4 (own); 40GB-eager artefact, sat=(3.8, 1.8) |
+| 1xA100-40 / vllm / GPTQ.4bit.MoE | 0.35 | 0.47 | 5 | §1.5 (own); sat=(5.8, 12.2) |
 | 1xT4 / pytorch / Unquantized | 0.04 | 0.47 | 142 | §1.1 |
 | 32vCPU-C7i / pytorch / Unquantized | 0.19 | 0.37 | 200 | §1.1 |
 | 32vCPU-C7i / onnxruntime / Unquantized | 0.17 | 0.28 | 12 | §1.1 |
@@ -280,12 +293,22 @@ python3 scripts/cli.py --model 8 --bits 16 --hw 1xH100 --engine vllm \
 | Mixtral 8x7B | 46.7B / 12.9B | 32 | 4096 | 8 | 128 | — | [`mistralai/Mixtral-8x7B-v0.1`](https://huggingface.co/mistralai/Mixtral-8x7B-v0.1) config |
 | Mixtral 8x22B | 141B / 39B | 56 | 6144 | 8 | 128 | — | [`mistralai/Mixtral-8x22B-v0.1`](https://huggingface.co/mistralai/Mixtral-8x22B-v0.1) config |
 | Qwen3-235B-A22B | 235B / 22B | 94 | 4096 | 4 | 128 | — | [`Qwen/Qwen3-235B-A22B`](https://huggingface.co/Qwen/Qwen3-235B-A22B) config |
-| DeepSeek-V3 | 671B / 37B | 61 | 7168 | 1 (MLA) | 128 | — | [DeepSeek-V3 paper](https://arxiv.org/abs/2412.19437) + config.json |
-| DeepSeek-V4-Flash | 284B / 13B | 43 | 4096 | 1 (MLA) | 512 | 128 | [`deepseek-ai/DeepSeek-V4-Flash`](https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash/raw/main/config.json) (verbatim) |
-| DeepSeek-V4-Pro | 1.6T / 49B | 61 | 7168 | 1 (MLA) | 512 | 128 | [`deepseek-ai/DeepSeek-V4-Pro`](https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro/raw/main/config.json) (verbatim) |
+| Llama 4 Scout | 109B / 17B | 48* | 5120* | 8 | 128 | 8192 (iRoPE) | HF gated; total/active/experts from public card |
+| DeepSeek-V3 | 671B / 37B | 61 | 7168 | 1 (MLA) | 288† | — | [DeepSeek-V3 paper](https://arxiv.org/abs/2412.19437) + config.json (verified 2026-05-15) |
+| DeepSeek-V4-Flash | 284B / 13B | 43 | 4096 | 1 (MLA) | 288† | 128 | speculative — V4 family not on HF without auth; assumes V3-like MLA dims |
+| DeepSeek-V4-Pro | 1.6T / 49B | 61 | 7168 | 1 (MLA) | 288† | 128 | speculative — same assumption as V4-Flash |
 
-DeepSeek-V4 архитектура verified pulling `config.json` напрямую с
-Hugging Face — числа в `ARCH_DEFAULTS` не приближены, а взяты буквально.
+\* Llama 4 Scout layers/d_model — best-guess; HF config gated, real values
+in step 6 once we download AWQ checkpoint.
+
+† **MLA byte-mapping**: real per-layer per-token KV bytes for MLA =
+`(kv_lora_rank + qk_rope_head_dim) × bytes_per_elem`. For DeepSeek-V3
+(kv_lora_rank=512, qk_rope=64) that's `576 × 2` FP16 bytes = 1152 B/token/layer.
+Our formula stores it as `kv_heads × head_dim × (kv_bits_k+kv_bits_v)/8`, so
+with FP16 K+V the factor `/8` gives 4 — and we set `head_dim=288` so that
+`1 × 288 × 4 = 1152` matches reality. The "288" is not a real attention
+head_dim; it's a numeric encoding of MLA compression. Verified directly
+from HF config.json for V3; V4 entries assume the same compression ratio.
 
 ## 4. Hardware-спецификации (`HARDWARE_SPECS`)
 

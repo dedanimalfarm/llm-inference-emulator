@@ -16,11 +16,17 @@ The calibration was performed on a specific A100 instance with the following cha
 
 ## 2. Executive Summary of Results
 
-| Model | Variant | alpha (MFU) | beta (MBU) | Saturation Tuple | Status |
+| Model | Variant | alpha (MFU) | beta (MBU) | Saturation Tuple (post-refit) | Status |
 |---|---|---:|---:|---|---|
 | **Qwen-2.5-7B** | AWQ.4bit | 0.453 | 0.440 | (7.8, 6.8) | **Calibrated** |
-| **Mixtral-8x7B** | GPTQ.4bit.MoE | 0.352 | 0.468 | (34.1, 6.5) | **Calibrated** |
-| **Llama-3.1-70B**| GPTQ.4bit | 0.221 | 0.670 | (21.5, 2.5) | **Survival (Eager)** |
+| **Mixtral-8x7B** | GPTQ.4bit.MoE | 0.352 | 0.468 | (5.8, 12.2) | **Calibrated** |
+| **Llama-3.1-70B**| GPTQ.4bit | 0.221 | 0.670 | (3.8, 1.8) | **Survival (Eager, 40GB-constrained)** |
+
+> `batch_saturation` values refit on output-only throughput in commit
+> `af99623` (2026-05-15). Pre-refit Mixtral was `(34.1, 6.5)` and Llama-70B
+> was `(21.5, 2.5)` — both gave +400-570% error at single-stream because
+> the fitter targeted aggregate (prefill+decode) throughput instead of
+> output-only. See `results/REPORT.md` for cross-check details.
 
 ### Key Performance Breakthroughs:
 1.  **Batch Saturation Fix**: Identified a bug where the emulator provided a "throughput bonus" at `batch=1`. Forcing `bs_eff(1)=1.0` and using the Hill-fit `(batch_max, batch_50pct)` reduced single-stream error from **+50% to <10%**.
