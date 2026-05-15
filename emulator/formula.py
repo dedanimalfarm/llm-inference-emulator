@@ -37,8 +37,6 @@ ARCH_DEFAULTS = {
     3.0:  {"layers": 36, "d_model": 2048, "kv_heads": 2},  # Qwen2.5-3B
     7.0:  {"layers": 28, "d_model": 3584, "kv_heads": 4},  # Qwen2.5-7B
     8.0:  {"layers": 32, "d_model": 4096, "kv_heads": 8},  # Llama-3.1-8B
-    10.0: {"layers": 28, "d_model": 3072, "kv_heads": 1,
-           "head_dim": 512, "n_active_b": 1.8},                # GigaChat-3.1-Lightning (MoE+MLA+MTP)
     13.0: {"layers": 40, "d_model": 5120, "kv_heads": 40}, # Llama-2-13B (Full)
     14.0: {"layers": 48, "d_model": 5120, "kv_heads": 8},  # Qwen2.5-14B
     32.0: {"layers": 64, "d_model": 5120, "kv_heads": 8},  # Qwen3-32B (dense)
@@ -58,8 +56,6 @@ ARCH_DEFAULTS = {
     284.0:{"layers": 43, "d_model": 4096, "kv_heads": 1,
            "head_dim": 512, "sliding_window": 128,
            "n_active_b": 13.0},                                # DeepSeek-V4-Flash (MLA, 256 exp, top-6)
-    400.0:{"layers": 56, "d_model": 6144, "kv_heads": 8,
-           "n_active_b": 17.0},                                # Llama 4 Maverick (128 exp, top-1)
     671.0:{"layers": 61, "d_model": 7168, "kv_heads": 1,
            "head_dim": 128,
            "n_active_b": 37.0},                                # DeepSeek-V3 (MLA, 256 exp, top-8)
