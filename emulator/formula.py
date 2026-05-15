@@ -53,15 +53,22 @@ ARCH_DEFAULTS = {
            "n_active_b": 39.0},                                # Mixtral 8x22B (8 exp, top-2)
     235.0:{"layers": 94, "d_model": 4096, "kv_heads": 4,
            "n_active_b": 22.0},                                # Qwen3-235B-A22B (128 exp, top-8)
+    # MLA-aware KV approximation: real per-layer per-token bytes for MLA are
+    # (kv_lora_rank + qk_rope_head_dim) * bytes_per_elem. Our formula uses
+    # `kv_heads * head_dim * (kv_bits_k + kv_bits_v)/8`. With FP16 K+V the
+    # /8 factor evaluates to 4, so we set head_dim = (kv_lora_rank +
+    # qk_rope_head_dim) / 2 — this lands the byte count at the right value.
+    # DeepSeek-V3 verified from HF config: kv_lora_rank=512, qk_rope=64
+    # → effective head_dim ≈ 288.
     284.0:{"layers": 43, "d_model": 4096, "kv_heads": 1,
-           "head_dim": 512, "sliding_window": 128,
-           "n_active_b": 13.0},                                # DeepSeek-V4-Flash (MLA, 256 exp, top-6)
+           "head_dim": 288, "sliding_window": 128,
+           "n_active_b": 13.0},                                # DeepSeek-V4-Flash (MLA, 256 exp, top-6) — speculative
     671.0:{"layers": 61, "d_model": 7168, "kv_heads": 1,
-           "head_dim": 128,
-           "n_active_b": 37.0},                                # DeepSeek-V3 (MLA, 256 exp, top-8)
+           "head_dim": 288,
+           "n_active_b": 37.0},                                # DeepSeek-V3 (MLA, kv_lora=512+rope=64, 256 exp, top-8)
     1600.0:{"layers": 61, "d_model": 7168, "kv_heads": 1,
-            "head_dim": 512, "sliding_window": 128,
-            "n_active_b": 49.0},                               # DeepSeek-V4-Pro (MLA, 384 exp, top-6)
+            "head_dim": 288, "sliding_window": 128,
+            "n_active_b": 49.0},                               # DeepSeek-V4-Pro (MLA, 384 exp, top-6) — speculative
 }
 
 

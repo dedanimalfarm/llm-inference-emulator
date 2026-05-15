@@ -362,15 +362,15 @@ def test_head_dim_override_inflates_kv_cache():
 
 def test_deepseek_v4_pro_arch_loaded_from_defaults():
     """Calling predict() for DeepSeek V4-Pro (size 1600) should pick up
-    n_active_b=49, head_dim=512 from ARCH_DEFAULTS automatically."""
+    n_active_b=49 and the MLA-mapped head_dim=288 from ARCH_DEFAULTS."""
     common = dict(
         n_params_b=1600.0, bits=4, p_in=1024, p_out=64, batch=1,
         peak_flops=get_peak_compute("1xA100", 16),
         mem_bw=get_memory_bandwidth("1xA100"),
         alpha=0.30, beta=0.70,
     )
-    # Explicit MoE/head_dim
-    explicit = predict(n_active_b=49.0, head_dim=512, **common)
+    # Explicit MoE / MLA-mapped head_dim (kv_lora_rank+qk_rope)/2 = (512+64)/2
+    explicit = predict(n_active_b=49.0, head_dim=288, **common)
     # From ARCH_DEFAULTS
     from_defaults = predict(**common)
     assert abs(explicit.prefill_s - from_defaults.prefill_s) < 1e-9
@@ -445,7 +445,8 @@ def test_deepseek_v4_pro_inherits_sliding_window_from_arch():
     # With sw=128, KV per request = 128 tokens × KV/token. Without, 100064
     # tokens. Memory must be massively smaller.
     assert from_arch.memory_gb < full_attn.memory_gb
-    assert (full_attn.memory_gb - from_arch.memory_gb) > 10  # at least 10 GB delta
+    # ~70 KB/token × 100k tokens ≈ 7 GB delta with MLA-mapped head_dim=288
+    assert (full_attn.memory_gb - from_arch.memory_gb) > 5
 
 
 def test_defaults_preserve_legacy_behavior():
