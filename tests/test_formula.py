@@ -180,8 +180,8 @@ def test_speculative_zero_accept_rate_raises():
 
 
 def test_batch_saturation_asymptote():
-    """At batch >> batch_50pct, bs_eff → batch_max regardless of batch.
-    We verify by extracting bs_eff = throughput · t_dec from the result."""
+    """At batch >> batch_50pct AND batch >> batch_max, bs_eff → batch_max.
+    Hill curve is clipped by queue depth, so bs_eff(batch) ≤ batch always."""
     common = dict(
         n_params_b=7, bits=16, p_in=256, p_out=64,
         peak_flops=get_peak_compute("1xA100", 16),
@@ -189,18 +189,19 @@ def test_batch_saturation_asymptote():
         alpha=0.40, beta=0.85,
         batch_saturation=(16, 2),
     )
-    small = predict(batch=2,   **common)
+    single = predict(batch=1, **common)
     big   = predict(batch=500, **common)
-    bs_eff_small = small.throughput_tok_s * small.decode_per_token_s
+    bs_eff_single = single.throughput_tok_s * single.decode_per_token_s
     bs_eff_big   = big.throughput_tok_s   * big.decode_per_token_s
-    # At batch=2 (==batch_50pct) we expect bs_eff ≈ batch_max/2 = 8
-    assert abs(bs_eff_small - 8.0) < 0.01
-    # At batch=500, bs_eff should be within 1% of batch_max=16
+    # bs_eff(1) must equal 1.0 — one queued request can't be more concurrent
+    assert abs(bs_eff_single - 1.0) < 1e-6
+    # bs_eff(500) → batch_max=16 within 1%
     assert abs(bs_eff_big - 16.0) / 16.0 < 0.01
 
 
-def test_batch_saturation_50pct_midpoint():
-    """At batch == batch_50pct, bs_eff == batch_max / 2 by construction."""
+def test_batch_saturation_clipped_by_queue():
+    """At batch ≤ batch_max with strong Hill term, bs_eff is clipped to batch.
+    Old Hill-only form gave bs_eff(2) = 8 for (16, 2) — physically nonsense."""
     common = dict(
         n_params_b=7, bits=16, p_in=256, p_out=64, batch=2,
         peak_flops=get_peak_compute("1xA100", 16),
@@ -208,9 +209,9 @@ def test_batch_saturation_50pct_midpoint():
         alpha=0.40, beta=0.85,
     )
     res = predict(batch_saturation=(16, 2), **common)
-    expected_bs_eff = 16.0 / 2  # batch == batch_50pct
-    expected_tput = expected_bs_eff / res.decode_per_token_s
-    assert abs(res.throughput_tok_s - expected_tput) / expected_tput < 1e-6
+    bs_eff = res.throughput_tok_s * res.decode_per_token_s
+    # batch=2, Hill=16*2/4=8 → clip to queue depth 2
+    assert abs(bs_eff - 2.0) < 1e-6
 
 
 def test_kv_packing_eff_inflates_memory_for_naive_allocator():
@@ -481,7 +482,7 @@ if __name__ == "__main__":
     test_speculative_decoding_speeds_up_decode()
     test_speculative_zero_accept_rate_raises()
     test_batch_saturation_asymptote()
-    test_batch_saturation_50pct_midpoint()
+    test_batch_saturation_clipped_by_queue()
     test_kv_packing_eff_inflates_memory_for_naive_allocator()
     test_engine_defaults_kv_packing_eff_wired()
     test_moe_uses_active_params_for_flops_not_total()

@@ -159,14 +159,16 @@ def predict(
     eff_mbw = mem_bw * tp_size * tp_efficiency
 
     # ---- Effective concurrent batch (continuous-batching saturation) ----
-    # Scheduler can keep `batch_max` slots filled; saturation curve is a
-    # Hill-style approximation: at batch == batch_50pct the effective
-    # concurrency is half of batch_max; at batch >> batch_50pct it asymptotes.
-    # Computed BEFORE the timing terms because both prefill and decode compute
-    # scale with the *active* batch, not the queued batch.
+    # Hill curve bounded by the physical floor and ceiling:
+    #   - cannot exceed the queue depth `batch` (no parallelism out of thin air)
+    #   - cannot fall below min(1, batch) (a queued request always counts as 1)
+    # At batch >> batch_50pct the Hill term dominates and asymptotes to
+    # `batch_max` (the scheduler cap).
     if batch_saturation is not None:
         batch_max, batch_50pct = batch_saturation
-        bs_eff = batch_max * batch / (batch + batch_50pct)
+        hill = batch_max * batch / (batch + batch_50pct)
+        floor = min(1.0, float(batch))
+        bs_eff = min(float(batch), max(floor, hill))
     else:
         bs_eff = float(batch)
 
