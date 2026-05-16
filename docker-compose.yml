@@ -1,0 +1,15 @@
+services:
+  emulator-ui:
+    build: .
+    image: llm-inference-emulator:latest
+    container_name: llm-emulator-ui
+    ports:
+      - "8501:8501"
+    restart: unless-stopped
+    # Live-reload during development: mount source over the container copy.
+    # Comment out the volumes block to use the immutable image only.
+    volumes:
+      - ./emulator:/app/emulator:ro
+      - ./ui:/app/ui:ro
+      - ./results:/app/results:ro
+      - ./docs:/app/docs:ro
