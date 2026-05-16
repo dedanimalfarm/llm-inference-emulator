@@ -97,8 +97,10 @@ def main():
             if "mixtral" in m_base:
                 params_b = 46.7
                 active_b = 12.9
+            elif "72b" in m_base: params_b = 72.0
             elif "70b" in m_base: params_b = 70.0
             elif "32b" in m_base: params_b = 32.0
+            elif "31b" in m_base: params_b = 30.7
             elif "8b" in m_base: params_b = 8.0
             elif "1.5b" in m_base: params_b = 1.5
             elif "7b" in m_base: params_b = 7.0
