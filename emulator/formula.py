@@ -42,8 +42,6 @@ ARCH_DEFAULTS = {
     30.7: {"layers": 60, "d_model": 5376, "kv_heads": 16,
            "head_dim": 256, "sliding_window": 1024},           # Gemma 4 31B (hybrid attention)
     32.0: {"layers": 64, "d_model": 5120, "kv_heads": 8},  # Qwen3-32B (dense)
-    109.0:{"layers": 48, "d_model": 5120, "kv_heads": 8,
-           "n_active_b": 17.0, "sliding_window": 8192},        # Llama 4 Scout (109B total, 17B active)
     34.0: {"layers": 48, "d_model": 7168, "kv_heads": 8},  # Yi-34B
     70.0: {"layers": 80, "d_model": 8192, "kv_heads": 8},  # Llama-3-70B
     110.0:{"layers": 80, "d_model": 8192, "kv_heads": 8},
