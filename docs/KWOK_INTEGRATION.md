@@ -291,54 +291,60 @@ Karpenter выбрал не тот instance-type; KEDA cooldown слишком �
 
 ## Где живёт код
 
-Предлагаю **отдельный репозиторий** `llm-cluster-sandbox`:
-- emu-local остаётся CLI/lib, импортируется как dependency
-- Разные деплой-юниты (Python библиотека vs K8s controllers + manifests +
-  Helm charts)
-- Разные релизы / тэги
+**Решено (2026-05-22)**: отдельный репозиторий
+[`dedanimalfarm/llm-cluster-sandbox`](https://github.com/dedanimalfarm/llm-cluster-sandbox)
+(приватный). emu-local остаётся CLI/lib, импортируется как dependency.
+
+Структура:
+```
+llm-cluster-sandbox/
+├── cluster/         # Фаза 0 — kwokctl bootstrap + 5 fake-node манифестов + smoke
+├── controller/      # Фаза 1 — Python pod controller, зовёт emulator.predict()
+├── exporters/       # Фаза 2 — DCGM-fake + vLLM-metrics Prometheus exporters
+└── examples/        # Фаза 3 — KEDA autoscaling эксперимент
+```
 
 Связь: `pip install -e ../emu-local` (dev) или
-`pip install emulator @ git+https://...@v0.X.Y` (pinned).
+`pip install emulator @ git+https://...@v0.X.Y` (pinned, когда эмулятор
+будет тегирован).
 
-**Контр-аргумент**: пока ничего не построено, можно начать как
-`emu-local/kwok/` подкаталог, выделить в отдельное репо когда
-вылезет за пределы 5-10 файлов. **Решение — в открытых вопросах**.
+Причина выделения сразу (а не позже): разные деплой-юниты (Python lib vs
+K8s controllers + manifests + Helm charts), разные CI workflow'ы
+(emu-local гоняет `pytest`-стиль unit-tests, sandbox понадобится
+kwokctl-setup в Actions), разные релизные циклы.
 
 ---
 
 ## Открытые вопросы
 
-1. **Отдельный репо или подкаталог?** См. выше. По умолчанию —
-   подкаталог `kwok/` в emu-local, миграция когда понадобится.
-
-2. **Python kopf vs Go client-go для controller?** Kopf проще
+1. **Python kopf vs Go client-go для controller?** Kopf проще
    написать (Python + наш эмулятор уже Python), но медленнее на 1000+
    подах. Для PoC — kopf. Для production-grade — переписать.
 
-3. **Где параметры workload?** Сейчас предложил pod annotations.
+2. **Где параметры workload?** Сейчас предложил pod annotations.
    Альтернативы: container env vars, ConfigMap. Annotations — самое
    K8s-native, видны в `kubectl describe`, не требуют restart pod'a
    при изменении.
 
-4. **Engine variety**: эмулятор поддерживает vllm / llama.cpp / pytorch /
+3. **Engine variety**: эмулятор поддерживает vllm / llama.cpp / pytorch /
    TGI / SGLang. Какие engines симулируем в первую очередь?
    Probably **vllm only для Фазы 3** — потому что vLLM metrics
    format — реальный стандарт, и autoscaling-эксперименты крутятся
    вокруг него.
 
-5. **Cluster fan-out — реалистично?** Real H100-кластеры — 8-128
+4. **Cluster fan-out — реалистично?** Real H100-кластеры — 8-128
    нод. Наш kwok должен спокойно держать 100+ fake-нод и 1000+ pods
    без тормозов. **Стресс-тест нужен в Фазе 0**.
 
-6. **GPU sharing (MIG / time-slicing)**: моделируем как «один pod на
+5. **GPU sharing (MIG / time-slicing)**: моделируем как «один pod на
    один GPU» в Фазе 1-3? Multi-tenancy откладываем на Фазу 4? Или
    сразу делаем MIG-aware controller? **Откладываем на Фазу 4.**
 
-7. **vLLM-metrics: какой conformance level?** Минимум — 4-5 ключевых
+6. **vLLM-metrics: какой conformance level?** Минимум — 4-5 ключевых
    метрик которые HPA/KEDA реально читают. Полный набор vLLM экспортирует
    ~50 метрик, не все нужны.
 
-8. **Замеры производительности**: насколько kwok + наш контроллер
+7. **Замеры производительности**: насколько kwok + наш контроллер
    масштабируется при 1000 pods / 100 nodes? Контроллер на kopf
    делает sync per-pod-event — нужна batching/queue, или нет?
 
