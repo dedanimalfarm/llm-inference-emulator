@@ -41,6 +41,118 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+st.markdown(
+    """
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+    /* Global Styles and Background overrides */
+    html, body, [class*="css"], .stApp {
+        font-family: 'Outfit', 'Inter', -apple-system, sans-serif;
+        background: #080a0f !important;
+        color: #e2e8f0 !important;
+    }
+    /* Sidebar styling overrides */
+    section[data-testid="stSidebar"] {
+        background: #0c0f16 !important;
+        border-right: 1px solid rgba(255, 255, 255, 0.05);
+    }
+    /* Elegant Title and Header styling */
+    h1, h2, h3 {
+        font-family: 'Outfit', sans-serif;
+        font-weight: 700 !important;
+        letter-spacing: -0.02em;
+        color: #ffffff !important;
+    }
+    /* Metrics Enhancements with hover animations */
+    div[data-testid="metric-container"] {
+        background: rgba(18, 22, 32, 0.4) !important;
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        border-radius: 14px;
+        padding: 15px 20px;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        backdrop-filter: blur(10px);
+    }
+    div[data-testid="metric-container"]:hover {
+        transform: translateY(-5px);
+        background: rgba(18, 22, 32, 0.7) !important;
+        border-color: rgba(0, 198, 255, 0.4);
+        box-shadow: 0 10px 30px rgba(0, 198, 255, 0.15);
+    }
+    /* Glassmorphic boxes for alerts/success/info */
+    div.element-container:has(div.stAlert) {
+        border-radius: 12px;
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        backdrop-filter: blur(10px);
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.05);
+    }
+    /* Premium Streamlit expanders */
+    div[data-testid="stExpander"] {
+        border-radius: 12px !important;
+        border: 1px solid rgba(255, 255, 255, 0.06) !important;
+        background: rgba(18, 22, 32, 0.4) !important;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15) !important;
+        backdrop-filter: blur(10px);
+        transition: all 0.3s ease;
+    }
+    div[data-testid="stExpander"]:hover {
+        border-color: rgba(0, 198, 255, 0.3) !important;
+        box-shadow: 0 8px 30px rgba(0, 198, 255, 0.08) !important;
+    }
+    /* Premium Streamlit tabs active state indicators */
+    button[data-baseweb="tab"] {
+        font-family: 'Outfit', sans-serif !important;
+        font-weight: 600 !important;
+        font-size: 15px !important;
+        transition: all 0.2s ease;
+    }
+    button[data-baseweb="tab"]:hover {
+        color: #00c6ff !important;
+    }
+    button[aria-selected="true"] {
+        color: #00c6ff !important;
+        border-bottom-color: #00c6ff !important;
+    }
+    /* Active step glowing card */
+    .active-step-card {
+        border: 1px solid rgba(0, 198, 255, 0.25) !important;
+        box-shadow: 0 0 25px rgba(0, 198, 255, 0.08) !important;
+        background: rgba(18, 22, 32, 0.6) !important;
+        border-radius: 14px;
+        padding: 24px;
+        backdrop-filter: blur(10px);
+        margin-top: 15px;
+        transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    /* Form styling and buttons styling */
+    div[data-testid="stForm"] {
+        border-radius: 16px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        background: rgba(18, 22, 32, 0.3);
+        padding: 25px;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+    }
+    /* Smooth button transitions */
+    button[kind="primary"] {
+        background: linear-gradient(135deg, #00c6ff, #0072ff) !important;
+        border: none !important;
+        font-weight: 700 !important;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        border-radius: 8px !important;
+        box-shadow: 0 4px 15px rgba(0, 114, 255, 0.4) !important;
+        transition: all 0.3s ease !important;
+    }
+    button[kind="primary"]:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px rgba(0, 114, 255, 0.6) !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+
 
 # ---------------------------------------------------------------------------
 # Cached data loaders
@@ -79,8 +191,177 @@ def lookup_calibration(hw: str, engine: str, precision: str):
             "n_rows": int(r["n_rows"])}
 
 
+def render_vram_bar(used_gb: float, capacity_gb: float, weights_gb: float, kv_gb: float, title_text: str = ""):
+    """Render a premium gradient HTML VRAM breakdown bar."""
+    ov_gb = min(2.0, max(0.5, capacity_gb * 0.05))
+    total_used_gb = weights_gb + kv_gb + ov_gb
+    free_gb = max(0.0, capacity_gb - total_used_gb)
+
+    # Convert to percentages for styling
+    w_pct = weights_gb / capacity_gb * 100
+    kv_pct = kv_gb / capacity_gb * 100
+    ov_pct = ov_gb / capacity_gb * 100
+    free_pct = free_gb / capacity_gb * 100
+
+    # Normalize percentages if over capacity (to fit 100%)
+    if total_used_gb > capacity_gb:
+        scale_factor = 100.0 / (w_pct + kv_pct + ov_pct)
+        w_pct *= scale_factor
+        kv_pct *= scale_factor
+        ov_pct *= scale_factor
+        free_pct = 0.0
+        bar_border = "2px solid #ff3b30"
+    else:
+        bar_border = "1px solid rgba(255,255,255,0.1)"
+
+    # Labels
+    w_label = f"Веса ({weights_gb:.1f} GB)" if w_pct > 12 else "Веса" if w_pct > 6 else ""
+    kv_label = f"KV Cache ({kv_gb:.1f} GB)" if kv_pct > 12 else "KV" if kv_pct > 6 else ""
+    ov_label = f"CUDA ({ov_gb:.1f} GB)" if ov_pct > 12 else "CUDA" if ov_pct > 6 else ""
+    free_label = f"Свободно ({free_gb:.1f} GB)" if free_pct > 12 else "Своб." if free_pct > 6 else ""
+
+    bar_html = f"""
+    <div style="width: 100%; font-family: 'Outfit', 'Segoe UI', sans-serif; margin-bottom: 25px;">
+        {f'<div style="font-size: 14px; font-weight: 600; margin-bottom: 8px; color: #a0aec0;">{title_text}</div>' if title_text else ""}
+        <div style="display: flex; width: 100%; height: 36px; border-radius: 10px; overflow: hidden; border: {bar_border}; background: #1e222b; box-shadow: 0 8px 24px rgba(0,0,0,0.15); transition: all 0.5s ease;">
+            {f'<div style="width: {w_pct}%; background: linear-gradient(135deg, #11998e, #38ef7d); color: white; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; border-right: 1px solid rgba(0,0,0,0.2); text-shadow: 0 1px 2px rgba(0,0,0,0.3);" title="Веса модели: {weights_gb:.2f} GB">{w_label}</div>' if w_pct > 0 else ""}
+            {f'<div style="width: {kv_pct}%; background: linear-gradient(135deg, #00c6ff, #0072ff); color: white; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; border-right: 1px solid rgba(0,0,0,0.2); text-shadow: 0 1px 2px rgba(0,0,0,0.3);" title="Кэш Key-Value контекстов: {kv_gb:.2f} GB">{kv_label}</div>' if kv_pct > 0 else ""}
+            {f'<div style="width: {ov_pct}%; background: linear-gradient(135deg, #f12711, #f5af19); color: white; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; border-right: 1px solid rgba(0,0,0,0.2); text-shadow: 0 1px 2px rgba(0,0,0,0.3);" title="Накладные расходы CUDA/Движка: {ov_gb:.2f} GB">{ov_label}</div>' if ov_pct > 0 else ""}
+            {f'<div style="width: {free_pct}%; background: #2c303b; color: #8892b0; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600;" title="Свободная память VRAM: {free_gb:.2f} GB">{free_label}</div>' if free_pct > 0 else ""}
+        </div>
+        <div style="display: flex; flex-wrap: wrap; gap: 15px; justify-content: space-between; margin-top: 10px; font-size: 13px; color: #a0aec0; background: rgba(255,255,255,0.02); padding: 10px 15px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);">
+            <div><span style="color: #38ef7d; font-size: 14px; vertical-align: middle;">●</span> <b>Веса модели:</b> <span style="color: #fff; font-weight: 600;">{weights_gb:.2f} GB</span></div>
+            <div><span style="color: #00c6ff; font-size: 14px; vertical-align: middle;">●</span> <b>KV Cache:</b> <span style="color: #fff; font-weight: 600;">{kv_gb:.2f} GB</span></div>
+            <div><span style="color: #f5af19; font-size: 14px; vertical-align: middle;">●</span> <b>CUDA Оверхед:</b> <span style="color: #fff; font-weight: 600;">{ov_gb:.2f} GB</span></div>
+            <div><span style="color: #8892b0; font-size: 14px; vertical-align: middle;">●</span> <b>Всего занято:</b> <span style="color: #fff; font-weight: 700;">{total_used_gb:.2f}</span> / <span style="color: #fff; font-weight: 700;">{capacity_gb:.0f} GB</span></div>
+        </div>
+    </div>
+    """
+
+
+def generate_attention_svg(mode: str) -> str:
+    """Generate high-fidelity vector graphic (SVG) diagram dynamically for attention modes."""
+    svg_filter = """<defs>
+    <filter id="glow-cyan" x="-30%" y="-30%" width="160%" height="160%">
+        <feGaussianBlur stdDeviation="4" result="blur" />
+        <feMerge>
+            <feMergeNode in="blur" />
+            <feMergeNode in="SourceGraphic" />
+        </feMerge>
+    </filter>
+    <filter id="glow-orange" x="-30%" y="-30%" width="160%" height="160%">
+        <feGaussianBlur stdDeviation="4" result="blur" />
+        <feMerge>
+            <feMergeNode in="blur" />
+            <feMergeNode in="SourceGraphic" />
+        </feMerge>
+    </filter>
+    <filter id="glow-purple" x="-30%" y="-30%" width="160%" height="160%">
+        <feGaussianBlur stdDeviation="5" result="blur" />
+        <feMerge>
+            <feMergeNode in="blur" />
+            <feMergeNode in="SourceGraphic" />
+        </feMerge>
+    </filter>
+</defs>"""
+
+    width = 720
+    height = 240
+    
+    q_y = 50
+    kv_y = 180
+    q_x = [60 + i * 85 for i in range(8)]
+    
+    content = []
+    
+    # Draw Background
+    content.append(f'<rect width="{width}" height="{height}" fill="rgba(10, 14, 23, 0.9)" rx="16" stroke="rgba(255,255,255,0.06)" stroke-width="1.5"/>')
+    
+    # Title overlay
+    content.append(f'<text x="20" y="30" fill="#a0aec0" font-size="12" font-family="system-ui, sans-serif" font-weight="700" letter-spacing="1">{mode} SCHEMA</text>')
+
+    if mode == "MHA":
+        # Connections
+        for i in range(8):
+            content.append(f'<line x1="{q_x[i]}" y1="{q_y}" x2="{q_x[i]}" y2="{kv_y}" stroke="rgba(0, 198, 255, 0.4)" stroke-width="2"/>')
+        # Q Heads
+        for i in range(8):
+            content.append(f'<circle cx="{q_x[i]}" cy="{q_y}" r="10" fill="#00c6ff" filter="url(#glow-cyan)"/>')
+            content.append(f'<text x="{q_x[i]}" y="{q_y - 18}" fill="#a0aec0" font-size="10" text-anchor="middle" font-family="system-ui, sans-serif">Q{i+1}</text>')
+        # KV Heads
+        for i in range(8):
+            content.append(f'<circle cx="{q_x[i]}" cy="{kv_y}" r="10" fill="#ff9f43" filter="url(#glow-orange)"/>')
+            content.append(f'<text x="{q_x[i]}" y="{kv_y + 22}" fill="#a0aec0" font-size="10" text-anchor="middle" font-family="system-ui, sans-serif">KV{i+1}</text>')
+            
+    elif mode == "GQA":
+        # Group 1: Q1..4 -> KV1, Group 2: Q5..8 -> KV2
+        kv_x = [187, 527]
+        
+        # Connections group 1
+        for i in range(4):
+            content.append(f'<line x1="{q_x[i]}" y1="{q_y}" x2="{kv_x[0]}" y2="{kv_y}" stroke="rgba(255, 159, 67, 0.4)" stroke-width="2"/>')
+        # Connections group 2
+        for i in range(4, 8):
+            content.append(f'<line x1="{q_x[i]}" y1="{q_y}" x2="{kv_x[1]}" y2="{kv_y}" stroke="rgba(255, 159, 67, 0.4)" stroke-width="2"/>')
+            
+        # Q Heads
+        for i in range(8):
+            content.append(f'<circle cx="{q_x[i]}" cy="{q_y}" r="10" fill="#00c6ff" filter="url(#glow-cyan)"/>')
+            content.append(f'<text x="{q_x[i]}" y="{q_y - 18}" fill="#a0aec0" font-size="10" text-anchor="middle" font-family="system-ui, sans-serif">Q{i+1}</text>')
+        # KV Heads
+        for i in range(2):
+            content.append(f'<circle cx="{kv_x[i]}" cy="{kv_y}" r="12" fill="#ff9f43" filter="url(#glow-orange)"/>')
+            content.append(f'<text x="{kv_x[i]}" y="{kv_y + 24}" fill="#a0aec0" font-size="10" text-anchor="middle" font-family="system-ui, sans-serif" font-weight="bold">Group {i+1} KV</text>')
+            
+    elif mode == "MQA":
+        # All Q -> 1 KV at center
+        kv_center_x = 357
+        for i in range(8):
+            content.append(f'<line x1="{q_x[i]}" y1="{q_y}" x2="{kv_center_x}" y2="{kv_y}" stroke="rgba(255, 56, 56, 0.35)" stroke-width="1.8"/>')
+            
+        # Q Heads
+        for i in range(8):
+            content.append(f'<circle cx="{q_x[i]}" cy="{q_y}" r="10" fill="#00c6ff" filter="url(#glow-cyan)"/>')
+            content.append(f'<text x="{q_x[i]}" y="{q_y - 18}" fill="#a0aec0" font-size="10" text-anchor="middle" font-family="system-ui, sans-serif">Q{i+1}</text>')
+        # Single KV Head
+        content.append(f'<circle cx="{kv_center_x}" cy="{kv_y}" r="14" fill="#ff3838" filter="url(#glow-orange)"/>')
+        content.append(f'<text x="{kv_center_x}" y="{kv_y + 26}" fill="#a0aec0" font-size="10" text-anchor="middle" font-family="system-ui, sans-serif" font-weight="bold">Shared Single KV</text>')
+        
+    elif mode == "MLA":
+        # DeepSeek Latent Bottleneck at center
+        latent_x = 357
+        latent_y = 115
+        
+        # Connect all Q to Latent Bottleneck
+        for i in range(8):
+            content.append(f'<line x1="{q_x[i]}" y1="{q_y}" x2="{latent_x}" y2="{latent_y}" stroke="rgba(224, 86, 253, 0.45)" stroke-width="2"/>')
+            
+        # Connect Latent Bottleneck to all reconstructed KV heads
+        for i in range(8):
+            content.append(f'<line x1="{latent_x}" y1="{latent_y}" x2="{q_x[i]}" y2="{kv_y}" stroke="rgba(255, 159, 67, 0.4)" stroke-width="1.5" stroke-dasharray="3,3"/>')
+            
+        # Q Heads
+        for i in range(8):
+            content.append(f'<circle cx="{q_x[i]}" cy="{q_y}" r="10" fill="#00c6ff" filter="url(#glow-cyan)"/>')
+            content.append(f'<text x="{q_x[i]}" y="{q_y - 18}" fill="#a0aec0" font-size="10" text-anchor="middle" font-family="system-ui, sans-serif">Q{i+1}</text>')
+            
+        # Latent Bottleneck circle
+        content.append(f'<circle cx="{latent_x}" cy="{latent_y}" r="18" fill="#e056fd" filter="url(#glow-purple)"/>')
+        content.append(f'<text x="{latent_x}" y="{latent_y + 4}" fill="#fff" font-size="9" text-anchor="middle" font-family="system-ui, sans-serif" font-weight="bold">c_KV</text>')
+        content.append(f'<text x="{latent_x + 105}" y="{latent_y + 4}" fill="#e056fd" font-size="9" font-family="system-ui, sans-serif" font-weight="bold">Latent Bottleneck (Compressed VRAM)</text>')
+        
+        # Reconstructed KV Heads
+        for i in range(8):
+            content.append(f'<circle cx="{q_x[i]}" cy="{kv_y}" r="7" fill="#ff9f43" filter="url(#glow-orange)"/>')
+            content.append(f'<text x="{q_x[i]}" y="{kv_y + 18}" fill="#a0aec0" font-size="9" text-anchor="middle" font-family="system-ui, sans-serif">Proj KV{i+1}</text>')
+
+    svg_str = f'<svg width="100%" height="100%" viewBox="0 0 {width} {height}" fill="none" xmlns="http://www.w3.org/2000/svg">{svg_filter}{"".join(content)}</svg>'
+    return svg_str
+
+
 # ---------------------------------------------------------------------------
 # Presets — one click to fill the whole sidebar
+# ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 PRESETS = {
     "🤖 7B чатбот / A100":      dict(hw="1xA100",     engine="vllm",      model_b=7.0,   bits=4,  precision="AWQ.4bit"),
@@ -289,15 +570,16 @@ ui_mode = st.session_state.get("ui_mode", "Базовый (Simple)")
 is_edu = ui_mode == "🎓 Учебный (Pedagogical)"
 is_adv = ui_mode == "⚙️ Продвинутый (Advanced)"
 
-tabs_list = ["🏠 Эмулятор", "📦 Справочник"]
+tabs_list = ["🏠 Эмулятор", "🔌 Анатомия GPU", "📦 Справочник"]
 if is_adv:
     tabs_list.append("🔬 Аналитика")
 
 tabs = st.tabs(tabs_list)
 tab_pred = tabs[0]
-tab_pre = tabs[1]
+tab_anat = tabs[1]
+tab_pre = tabs[2]
 if is_adv:
-    tab_sca = tabs[2]
+    tab_sca = tabs[3]
 else:
     tab_sca = None
 
@@ -564,22 +846,15 @@ llama-bench/vLLM прогоны на RTX-3090, A100, RTX-5090).
                   help=f"Prefill + {p_out}× decode")
 
         # Memory progress
-        st.markdown("**💾 Распределение VRAM (памяти видеокарты):**")
         cap = hw_spec["memory_capacity_gb"]
         used = res.memory_gb
         
         weights_gb = snap["n_params_b"] * snap["bits"] / 8.0
         kv_gb = max(0.0, used - weights_gb)
 
-        c_mem1, c_mem2, c_mem3 = st.columns(3)
-        c_mem1.metric("📦 Веса модели (Weights)", f"{weights_gb:.1f} GB",
-                      help="Память, занимаемая статическими весами модели в VRAM. Зависит от количества параметров модели (B) и разрядности квантования (bits).")
-        c_mem2.metric("💾 KV-Кэш (Context)", f"{kv_gb:.1f} GB",
-                      help="Динамическая память для хранения истории контекста (ключей и значений). Растет линейно с ростом батча и суммарной длины контекста (P_in + P_out).")
-        c_mem3.metric("📊 Всего требуется VRAM", f"{used:.1f} GB / {cap:.0f} GB",
-                      help="Суммарный объем VRAM, необходимый для запуска. Должен быть меньше физического объема VRAM видеокарты.")
+        # Draw beautiful gradient VRAM bar instead of plain progress
+        render_vram_bar(used, cap, weights_gb, kv_gb, title_text="💾 Интерактивная карта распределения памяти VRAM")
 
-        pct = min(used / cap, 1.5)
         if used > cap:
             st.error(f"⛔ **ОШИБКА: Превышен лимит VRAM!** Требуется **{used:.1f} GB**, но на видеокарте доступно только {cap:.0f} GB.\n\n"
                      f"**Решения для оптимизации VRAM:**\n"
@@ -591,7 +866,59 @@ llama-bench/vLLM прогоны на RTX-3090, A100, RTX-5090).
                        f"В реальном инференсе (например, vLLM) необходим запас в 15-20% под накладные расходы CUDA-драйвера и пиковые всплески длинных диалогов.")
         else:
             st.success(f"✅ **Достаточно памяти!** Занято **{used:.1f} GB** из {cap:.0f} GB ({100 * used / cap:.0f}%). Модель свободно помещается в VRAM.")
-        st.progress(min(used / cap, 1.0))
+
+        # Smart Optimization Assistant
+        st.markdown("### 📈 Советник по оптимизации инференса")
+        
+        # Analyze performance bottleneck
+        is_oom = used > cap
+        
+        if is_oom:
+            st.markdown(
+                """
+                <div style="background: rgba(255, 59, 48, 0.08); border: 1px solid rgba(255, 59, 48, 0.2); border-radius: 12px; padding: 18px 22px; margin-bottom: 25px;">
+                    <h5 style="color: #ff453a; margin-top: 0; margin-bottom: 8px; font-weight: 700; font-size: 16px;">🚨 Критический дефицит памяти (Out of Memory)</h5>
+                    <p style="color: #ff9f0a; font-size: 13.5px; margin: 0 0 10px 0; line-height: 1.5;">Суммарный объем весов и KV-кэша превышает физический VRAM вашего GPU. Выберите один из следующих путей для решения:</p>
+                    <ul style="color: #f5f5f7; font-size: 13px; margin: 0; padding-left: 20px; line-height: 1.6;">
+                        <li><b>Квантование весов:</b> Снизьте разрядность весов модели в сайдбаре слева (например, с 16 до 4 или 8 бит). Это сократит размер модели во VRAM в 2-4 раза.</li>
+                        <li><b>Снижение Batch Size:</b> Уменьшите размер батча в форме нагрузки. KV-кэш масштабируется линейно с ростом батча.</li>
+                        <li><b>Параллельный инференс (TP/PP):</b> Включите Tensor Parallelism (TP) или Pipeline Parallelism (PP) в расширенных параметрах, чтобы распределить веса и KV-кэш по нескольким видеокартам.</li>
+                        <li><b>Квантование KV-кэша:</b> В расширенных параметрах в разделе "Оптимизации KV-Кэша" понизьте разрядность хранения Key/Value (например, до 4 или 8 бит).</li>
+                    </ul>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+        else:
+            prefill_bot = res.bottleneck_prefill
+            decode_bot = res.bottleneck_decode
+            
+            prefill_text = ""
+            decode_text = ""
+            
+            if prefill_bot == "memory":
+                prefill_text = "<li><b>Prefill (Анализ промпта) ограничен памятью (Memory-bound):</b> Ваш промпт слишком короткий или батч мал, чтобы загрузить ядра GPU. Вы можете увеличить батч для более эффективной утилизации чипа или применить квантование весов, чтобы повысить скорость чтения.</li>"
+            else:
+                prefill_text = "<li><b>Prefill ограничен вычислениями (Compute-bound):</b> Ядра GPU загружены на максимум. Для ускорения используйте более мощный GPU, включите <b>FlashAttention</b> для снижения накладных расходов внимания или примените тензорный параллелизм (TP).</li>"
+                
+            if decode_bot == "memory":
+                decode_text = "<li><b>Decode (Генерация ответа) ограничен памятью (Memory-bound):</b> Это стандартное поведение авторегрессионного инференса, так как веса перечитываются из VRAM для каждого токена. Для кратного роста скорости генерации используйте:<ul><li><b>Квантование весов (AWQ, GPTQ, GGUF):</b> Уменьшит размер весов, считываемых из VRAM на каждом шаге.</li><li><b>Сжатие KV-кэша (GQA, MLA):</b> Значительно разгружает шину памяти от передачи контекста на больших батчах.</li><li><b>Увеличение Batch Size:</b> Переиспользует считанные из VRAM веса модели для многих пользователей одновременно, драматически повышая совокупную пропускную способность (Throughput).</li></ul></li>"
+            else:
+                decode_text = "<li><b>Decode ограничен вычислениями (Compute-bound):</b> Ваш батч настолько велик (или модель огромна), что ядра GPU перегружены вычислениями, а не чтением памяти. Вы упёрлись в пиковую производительность. Для ускорения используйте более мощный GPU или распределите вычисления (TP/PP).</li>"
+                
+            st.markdown(
+                f"""
+                <div style="background: rgba(0, 198, 255, 0.05); border: 1px solid rgba(0, 198, 255, 0.15); border-radius: 12px; padding: 18px 22px; margin-bottom: 25px;">
+                    <h5 style="color: #00c6ff; margin-top: 0; margin-bottom: 10px; font-weight: 700; font-size: 16px;">💡 Анализ производительности и рекомендации</h5>
+                    <ul style="color: #f5f5f7; font-size: 13px; margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 10px; line-height: 1.6;">
+                        {prefill_text}
+                        {decode_text}
+                    </ul>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
 
         # Cost
         if cost_per_hour > 0:
@@ -838,30 +1165,7 @@ llama-bench/vLLM прогоны на RTX-3090, A100, RTX-5090).
 
             st.markdown(f"### 📊 Интерактивная карта распределения памяти VRAM ({capacity_gb:.0f} GB)")
             st.caption("Цветная шкала показывает, какую долю физической памяти GPU занимают различные компоненты инференса.")
-            
-            # Labels
-            w_label = f"Веса ({w_gb:.1f} GB)" if w_pct > 12 else "Веса" if w_pct > 6 else ""
-            kv_label = f"KV Cache ({kv_gb:.1f} GB)" if kv_pct > 12 else "KV" if kv_pct > 6 else ""
-            ov_label = f"Ов. ({ov_gb:.1f} GB)" if ov_pct > 12 else "Ов." if ov_pct > 6 else ""
-            free_label = f"Свободно ({free_gb:.1f} GB)" if free_pct > 12 else "Своб." if free_pct > 6 else ""
-
-            bar_html = f"""
-            <div style="width: 100%; font-family: sans-serif; margin-bottom: 20px;">
-                <div style="display: flex; width: 100%; height: 32px; border-radius: 8px; overflow: hidden; border: {bar_border}; background-color: #f0f2f6; box-shadow: inset 0 1px 3px rgba(0,0,0,0.12);">
-                    {f'<div style="width: {w_pct}%; background-color: #2ca02c; color: white; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: bold; border-right: 1px solid rgba(255,255,255,0.2);" title="Статические веса модели: {w_gb:.2f} GB">{w_label}</div>' if w_pct > 0 else ""}
-                    {f'<div style="width: {kv_pct}%; background-color: #1f77b4; color: white; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: bold; border-right: 1px solid rgba(255,255,255,0.2);" title="Кэш Key-Value контекстов: {kv_gb:.2f} GB">{kv_label}</div>' if kv_pct > 0 else ""}
-                    {f'<div style="width: {ov_pct}%; background-color: #ff7f0e; color: white; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: bold; border-right: 1px solid rgba(255,255,255,0.2);" title="CUDA Context / Драйверные накладные расходы: {ov_gb:.2f} GB">{ov_label}</div>' if ov_pct > 0 else ""}
-                    {f'<div style="width: {free_pct}%; background-color: #bbbbbb; color: #333333; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: bold;" title="Свободная память VRAM: {free_gb:.2f} GB">{free_label}</div>' if free_pct > 0 else ""}
-                </div>
-                <div style="display: flex; justify-content: space-between; margin-top: 6px; font-size: 12px; color: #555;">
-                    <div>🟢 <b>Веса модели:</b> {w_gb:.2f} GB</div>
-                    <div>🔵 <b>KV Cache:</b> {kv_gb:.2f} GB</div>
-                    <div>🟠 <b>Оверхед CUDA/Движка:</b> {ov_gb:.2f} GB</div>
-                    <div>⚫ <b>Всего занято:</b> {total_used_gb:.2f} / {capacity_gb:.0f} GB</div>
-                </div>
-            </div>
-            """
-            st.markdown(bar_html, unsafe_allow_html=True)
+            render_vram_bar(total_used_gb, capacity_gb, w_gb, kv_gb)
             
             # Stepper Tabs
             edu_tab1, edu_tab2, edu_tab3, edu_tab4 = st.tabs([
@@ -914,6 +1218,71 @@ llama-bench/vLLM прогоны на RTX-3090, A100, RTX-5090).
                     f"$$KV_{{total}} = \\frac{{{kv_tok_b:.0f} \\times {ctx_total} \\times {batch}}}{{{kv_eff_pct}}} = {kv_total_gb * 1024:.1f}\\text{{ MB}} \\approx {kv_total_gb:.3f}\\text{{ GB}}$$"
                 )
                 
+                # --- 🧠 Interactive Attention Visualizer ---
+                st.markdown("---")
+                st.markdown("#### 🧠 Интерактивное сравнение механизмов внимания (MHA vs GQA vs MQA vs MLA)")
+                st.caption(
+                    "Современные LLM оптимизируют хранение KV-кэша в памяти VRAM с помощью различных архитектур группировки и сжатия голов внимания. "
+                    "Переключайте режимы ниже, чтобы увидеть их физическое устройство в виде интерактивной схемы и узнать размер занимаемой памяти для вашей текущей нагрузки."
+                )
+                
+                att_mode = st.radio(
+                    "Выберите механизм внимания для визуализации:",
+                    ["Multi-Head Attention (MHA)", "Grouped-Query Attention (GQA)", "Multi-Query Attention (MQA)", "Multi-Head Latent Attention (MLA)"],
+                    horizontal=True,
+                    key="att_visualizer_mode"
+                )
+                
+                selected_mode_key = "MHA"
+                if "GQA" in att_mode:
+                    selected_mode_key = "GQA"
+                elif "MQA" in att_mode:
+                    selected_mode_key = "MQA"
+                elif "MLA" in att_mode:
+                    selected_mode_key = "MLA"
+                    
+                st.markdown(generate_attention_svg(selected_mode_key), unsafe_allow_html=True)
+                
+                # Math footprints calculation side-by-side
+                # Let's get active query heads count:
+                d_model = arch_temp.get("d_model", 4096)
+                n_heads_act = d_model // hd_dim if hd_dim > 0 else 32
+                if n_heads_act <= 0:
+                    n_heads_act = 32
+                
+                # Calculate KV bytes per token for all modes
+                mha_tok_b = L_layers * n_heads_act * hd_dim * 2 * (16 / 8.0) # assuming fp16
+                gqa_tok_b = L_layers * max(1, n_heads_act // 8) * hd_dim * 2 * (16 / 8.0)
+                mqa_tok_b = L_layers * 1 * hd_dim * 2 * (16 / 8.0)
+                mla_tok_b = L_layers * (512 + 64) * (16 / 8.0) # latent rank 512 + 64 rope dim
+                
+                # Calculate total GB for each mode using current batch, context, and packing efficiency
+                mha_total_gb = mha_tok_b * ctx_total * batch / kv_eff_pct / 1e9
+                gqa_total_gb = gqa_tok_b * ctx_total * batch / kv_eff_pct / 1e9
+                mqa_total_gb = mqa_tok_b * ctx_total * batch / kv_eff_pct / 1e9
+                mla_total_gb = mla_tok_b * ctx_total * batch / kv_eff_pct / 1e9
+                
+                # Render comparison scorecard metrics
+                col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+                with col_m1:
+                    st.metric("MHA (Базовый)", f"{mha_total_gb * 1024:.1f} MB", "0% сжатие", delta_color="off")
+                with col_m2:
+                    savings_gqa = (1.0 - gqa_total_gb / mha_total_gb) * 100 if mha_total_gb > 0 else 0
+                    st.metric("GQA (Llama-3)", f"{gqa_total_gb * 1024:.1f} MB", f"-{savings_gqa:.0f}% памяти", delta_color="inverse")
+                with col_m3:
+                    savings_mqa = (1.0 - mqa_total_gb / mha_total_gb) * 100 if mha_total_gb > 0 else 0
+                    st.metric("MQA (Falcon)", f"{mqa_total_gb * 1024:.1f} MB", f"-{savings_mqa:.0f}% памяти", delta_color="inverse")
+                with col_m4:
+                    savings_mla = (1.0 - mla_total_gb / mha_total_gb) * 100 if mha_total_gb > 0 else 0
+                    st.metric("MLA (DeepSeek)", f"{mla_total_gb * 1024:.1f} MB", f"-{savings_mla:.0f}% памяти", delta_color="inverse")
+                
+                st.info(
+                    "💡 **Физический вывод:** Внедрение GQA (в Llama-3, Mistral) дает кратное сокращение кэша KV. "
+                    "Внедрение MLA (DeepSeek-V3) сжимает KV-кэш почти в 15 раз относительно MHA, "
+                    "что позволяет обрабатывать гигантские контексты и обслуживать миллионы пользователей без перегрузки VRAM!"
+                )
+                st.markdown("---")
+                
                 st.markdown("### 3. Производительность и фазы инференса (TFLOPS vs. Memory)")
                 intensity_prefill = (2.0 * N_active * bs_eff * p_in) / W if W > 0 else 1.0
                 intensity_decode = (2.0 * N_active * bs_eff) / W if W > 0 else 1.0
@@ -952,24 +1321,57 @@ llama-bench/vLLM прогоны на RTX-3090, A100, RTX-5090).
                 with c_wi3:
                     wi_pout = st.slider("Длина генерации (P_out)", 16, 2048, int(p_out), step=16, key="wi_pout_slider")
 
+                # Custom model architecture override in the sandbox
+                with st.expander("🔧 Настроить архитектуру экспериментальной модели (Advanced)"):
+                    wi_custom_arch = st.checkbox("Переопределить архитектуру модели в песочнице", value=False, key="wi_custom_arch")
+                    if wi_custom_arch:
+                        wi_layers = st.slider("Количество слоев модели (L)", 8, 128, int(L_layers), key="wi_layers_val")
+                        wi_h_kv = st.slider("Количество KV-голов модели (H_kv)", 1, 64, int(H_kv), key="wi_h_kv_val")
+                        wi_hd_dim = st.slider("Размерность головы (head_dim)", 32, 256, int(hd_dim), step=16, key="wi_hd_dim_val")
+                        wi_is_mla = st.checkbox("Использовать MLA сжатие KV", value=is_mla, key="wi_is_mla_val")
+                        if wi_is_mla:
+                            wi_mla_rank = st.slider("Ранг сжатия KV (MLA Lora Rank)", 64, 1024, int(snap.get("mla_kv_lora_rank") or 512), step=64, key="wi_mla_rank_val")
+                            wi_mla_rope = st.slider("Размерность QK RoPE", 16, 256, int(snap.get("mla_qk_rope_dim") or 64), step=16, key="wi_mla_rope_val")
+                        else:
+                            wi_mla_rank = 0
+                            wi_mla_rope = 0
+                    else:
+                        wi_layers = L_layers
+                        wi_h_kv = H_kv
+                        wi_hd_dim = hd_dim
+                        wi_is_mla = is_mla
+                        wi_mla_rank = snap.get("mla_kv_lora_rank")
+                        wi_mla_rope = snap.get("mla_qk_rope_dim")
+
                 # Recalculate everything for What-If
                 wi_ctx_total = wi_pin + wi_pout
                 if sliding_window is not None:
                     wi_ctx_total = min(wi_ctx_total, sliding_window)
                 
-                # KV Cache on single token in what-if
-                if is_mla:
-                    wi_kv_tok_b = L_layers * (snap["mla_kv_lora_rank"] + snap["mla_qk_rope_dim"]) * kv_k / 8.0
+                # Calculate weights size if custom architecture is overridden
+                if wi_custom_arch:
+                    scale_w = wi_layers / L_layers
+                    wi_W = W * scale_w
+                    wi_w_gb = wi_W / 1e9
                 else:
-                    wi_kv_tok_b = L_layers * H_kv * hd_dim * (kv_k + kv_v) / 8.0
+                    wi_W = W
+                    wi_w_gb = w_gb
+
+                # KV Cache on single token in what-if
+                if wi_is_mla and wi_mla_rank and wi_mla_rope:
+                    wi_kv_tok_b = wi_layers * (wi_mla_rank + wi_mla_rope) * kv_k / 8.0
+                    wi_tok_formula_str = f"{wi_layers} \\times ({wi_mla_rank} + {wi_mla_rope}) \\times \\frac{{{kv_k}}}{{8}}"
+                else:
+                    wi_kv_tok_b = wi_layers * wi_h_kv * wi_hd_dim * (kv_k + kv_v) / 8.0
+                    wi_tok_formula_str = f"{wi_layers} \\times {wi_h_kv} \\times {wi_hd_dim} \\times \\frac{{{kv_k} + {kv_v}}}{{8}}"
                 
                 wi_kv_bytes = wi_kv_tok_b * wi_ctx_total * wi_batch / kv_eff_pct
                 wi_kv_gb = wi_kv_bytes / 1e9
-                wi_total_vram = w_gb + wi_kv_gb + ov_gb
+                wi_total_vram = wi_w_gb + wi_kv_gb + ov_gb
 
                 # Intensities for what-if
-                wi_intensity_prefill = (2.0 * N_active * wi_batch * wi_pin) / W if W > 0 else 1.0
-                wi_intensity_decode = (2.0 * N_active * wi_batch) / W if W > 0 else 1.0
+                wi_intensity_prefill = (2.0 * N_active * wi_batch * wi_pin) / wi_W if wi_W > 0 else 1.0
+                wi_intensity_decode = (2.0 * N_active * wi_batch) / wi_W if wi_W > 0 else 1.0
 
                 st.markdown("#### 📊 Мгновенный результат эксперимента:")
                 col_res1, col_res2, col_res3 = st.columns(3)
@@ -985,13 +1387,13 @@ llama-bench/vLLM прогоны на RTX-3090, A100, RTX-5090).
 
                 # Show visual math formula with live values for What-If
                 st.latex(rf"""
-                KV_{{\text{{total}}}} \;=\; \frac{{{wi_kv_tok_b:.0f}\text{{ B/tok}} \times {wi_ctx_total}\text{{ ток}} \times {wi_batch}}}{{{kv_eff_pct}}} \;=\; {wi_kv_gb:.3f}\text{{ GB}}
+                KV_{{\text{{total}}}} \;=\; \frac{{{wi_tok_formula_str} \times {wi_ctx_total}\text{{ ток}} \times {wi_batch}}}{{{kv_eff_pct}}} \;=\; {wi_kv_gb:.3f}\text{{ GB}}
                 """)
                 
                 if wi_total_vram > capacity_gb:
-                    st.error(f"❌ **OOM! При этих параметрах вы выйдете за лимит памяти GPU:** требуется **{wi_total_vram:.1f} GB** при ёмкости **{capacity_gb:.0f} GB**.")
+                    st.error(f"❌ **OOM! При этих параметрах вы выйдете за лимит памяти GPU:** требуется **{wi_total_vram:.1f} GB** (веса: {wi_w_gb:.1f} GB, KV-кэш: {wi_kv_gb:.1f} GB) при ёмкости **{capacity_gb:.0f} GB**.")
                 else:
-                    st.success(f"✅ **Модель поместится в VRAM:** требуется **{wi_total_vram:.1f} GB** (свободно еще **{capacity_gb - wi_total_vram:.1f} GB**).")
+                    st.success(f"✅ **Модель поместится в VRAM:** требуется **{wi_total_vram:.1f} GB** (веса: {wi_w_gb:.1f} GB, KV-кэш: {wi_kv_gb:.1f} GB, свободно еще **{capacity_gb - wi_total_vram:.1f} GB**).")
             
             with edu_tab2:
                 st.markdown("### Визуализация Roofline-модели")
@@ -1001,9 +1403,31 @@ llama-bench/vLLM прогоны на RTX-3090, A100, RTX-5090).
                     "Звезды показывают, где именно находятся фазы Prefill и Decode для вашей нагрузки."
                 )
                 import numpy as np
+                # Interactive multiselect to compare with other GPUs on the Roofline chart
+                gpus_to_compare = st.multiselect(
+                    "🔍 Сравнить с другими графическими процессорами на Roofline-графике:",
+                    list(HARDWARE_SPECS.keys()),
+                    default=[snap["hw"]],
+                    help="Вы можете выбрать несколько видеокарт из списка, чтобы наложить их теоретические границы (Ceilings) друг на друга для наглядного сравнения."
+                )
+                
+                # Make sure the currently active GPU is always included
+                if snap["hw"] not in gpus_to_compare:
+                    gpus_to_compare = [snap["hw"]] + gpus_to_compare
+
+                roof_rows = []
                 xs = np.logspace(-1, 4, 100)
-                ys = np.minimum(eff_flops, eff_mbw * xs) / 1e12
-                roof_df = pd.DataFrame({"Intensity": xs, "Performance": ys, "Type": "GPU Roofline Ceiling"})
+                for hw_name in gpus_to_compare:
+                    hw_flops = get_peak_compute(hw_name, compute_bits)
+                    hw_bw = get_memory_bandwidth(hw_name)
+                    for x in xs:
+                        y = min(hw_flops, hw_bw * x) / 1e12
+                        roof_rows.append({
+                            "Intensity": x,
+                            "Performance": y,
+                            "GPU": hw_name
+                        })
+                roof_df = pd.DataFrame(roof_rows)
                 
                 prefill_flops = 2.0 * N_active * p_in * bs_eff
                 prefill_tflops = (prefill_flops / res.prefill_s) / 1e12 if res.prefill_s > 0 else 0.0
@@ -1016,20 +1440,21 @@ llama-bench/vLLM прогоны на RTX-3090, A100, RTX-5090).
                     {"Intensity": intensity_decode, "Performance": decode_tflops, "Phase": "⭐ Decode Phase (Generation)"}
                 ])
                 
-                line_chart = alt.Chart(roof_df).mark_line(color="#2ca02c", strokeWidth=3).encode(
+                line_chart = alt.Chart(roof_df).mark_line(strokeWidth=3).encode(
                     x=alt.X("Intensity:Q", scale=alt.Scale(type="log"), title="Арифметическая интенсивность (FLOP / Byte)"),
                     y=alt.Y("Performance:Q", scale=alt.Scale(type="log"), title="Производительность (TFLOPS)"),
-                    tooltip=["Intensity", "Performance"]
+                    color=alt.Color("GPU:N", title="Модели GPU", scale=alt.Scale(scheme="category10")),
+                    tooltip=["GPU", alt.Tooltip("Intensity:Q", format=".1f"), alt.Tooltip("Performance:Q", format=".2f")]
                 )
                 
                 pts_chart = alt.Chart(pts_df).mark_point(size=220, filled=True, color="#d62728").encode(
                     x="Intensity:Q",
                     y="Performance:Q",
-                    color=alt.Color("Phase:N", legend=alt.Legend(title="Фазы инференса")),
+                    color=alt.Color("Phase:N", legend=alt.Legend(title="Фазы вашей нагрузки")),
                     tooltip=["Phase", alt.Tooltip("Intensity:Q", format=".2f"), alt.Tooltip("Performance:Q", format=".2f")]
                 )
                 
-                st.altair_chart((line_chart + pts_chart).properties(height=350), width="stretch")
+                st.altair_chart((line_chart + pts_chart).properties(height=380), width="stretch")
                 st.caption("Если точка лежит на горизонтальном участке зеленой линии — она ограничена Compute (ядрами). Если на наклонном — Memory (памятью).")
                 
                 st.divider()
@@ -1059,53 +1484,148 @@ llama-bench/vLLM прогоны на RTX-3090, A100, RTX-5090).
                 )
             
             with edu_tab3:
-                st.markdown("### 🔄 Жизненный цикл обработки вашего запроса в GPU:")
-                st.caption("Нажмите на стрелочки ниже, чтобы рассмотреть каждый шаг процесса инференса в деталях.")
+                st.markdown("### 🔄 Жизненный цикл обработки вашего запроса в GPU")
+                st.caption("Нажимайте на вкладки шагов ниже, чтобы изучить подробную физику и математику инференса на каждом этапе прохождения запроса.")
+
+                # Initialize stepper step
+                if "lifecycle_step" not in st.session_state:
+                    st.session_state["lifecycle_step"] = 0
+
+                # Render horizontal 5-column navigation stepper
+                cols_step = st.columns(5)
+                steps_meta = [
+                    ("📥 1. Токенизация", 0),
+                    ("⚡ 2. Prefill", 1),
+                    ("💾 3. KV Cache", 2),
+                    ("🔄 4. Decode", 3),
+                    ("📤 5. Вывод", 4)
+                ]
                 
-                st.info(
-                    "**📥 Шаг 1: Токенизация (Tokenization)**\n\n"
-                    "Ваш входной текст разбивается на токены (словоформы или части слов). "
-                    f"Ваш промпт преобразован в **{p_in} токенов**."
-                )
-                st.markdown("⬇️")
-                
+                for label, idx in steps_meta:
+                    with cols_step[idx]:
+                        btn_type = "primary" if st.session_state["lifecycle_step"] == idx else "secondary"
+                        if st.button(label, key=f"step_btn_{idx}", use_container_width=True, type=btn_type):
+                            st.session_state["lifecycle_step"] = idx
+                            st.rerun()
+
+                # Get active step
+                active_step = st.session_state["lifecycle_step"]
+
+                # Resolve hidden parameters
+                d_model = arch_temp.get("d_model", 4096)
                 prefill_flops_total = 2.0 * N_active * p_in * bs_eff / 1e12
-                st.success(
-                    f"**⚡ Шаг 2: Фаза Prefill (Насыщение)**\n\n"
-                    f"GPU считывает веса модели и обрабатывает все **{p_in} токенов** промпта параллельно в один проход. "
-                    f"Это требует огромных параллельных вычислений на CUDA-ядрах.\n\n"
-                    f"- 🧮 **Объем вычислений:** {prefill_flops_total:.3f} TFLOPs операций\n"
-                    f"- 🕒 **Время выполнения:** {res.prefill_s * 1000:.0f} мс\n"
-                    f"- 📈 **Арифметическая интенсивность:** {intensity_prefill:.1f} FLOP/byte\n"
-                    f"- 🚨 **Физический предел:** упирается в **{res.bottleneck_prefill.upper()}**."
-                )
-                st.markdown("⬇️")
-                
-                st.info(
-                    f"**💾 Шаг 3: Запись в KV-кэш (KV Cache Storage)**\n\n"
-                    f"Для каждого из {p_in} токенов промпта вычисляются векторы ключей (Key) и значений (Value). "
-                    "Они сохраняются во VRAM, чтобы избежать квадратичного пересчета внимания на последующих шагах.\n\n"
-                    f"- 📐 **Размер KV на токен:** {kv_tok_b:.0f} байт\n"
-                    f"- 💾 **Всего выделено во VRAM:** {kv_total / 1e6:.1f} MB (для всего батча из {batch} запросов)\n"
-                    f"- 🌐 **Скорость записи:** ограничена пропускной способностью HBM/VRAM ({eff_mbw / 1e9:.0f} GB/s)."
-                )
-                st.markdown("⬇️")
-                
-                st.warning(
-                    f"**🔄 Шаг 4: Цикл Decode (Авторегрессия)**\n\n"
-                    f"Модель начинает генерировать ответ последовательно, токен за токеном. На генерацию каждого из **{p_out} токенов** ответа "
-                    f"GPU вынужден считывать из памяти VRAM абсолютно все веса модели (**{W / 1e9:.1f} GB**).\n\n"
-                    f"- 🕒 **Время на один токен:** {res.decode_per_token_s * 1000:.1f} мс/токен\n"
-                    f"- 📈 **Арифметическая интенсивность:** {intensity_decode:.2f} FLOP/byte\n"
-                    f"- 🚨 **Физический лимит:** упирается в **{res.bottleneck_decode.upper()}** (низкий батч не позволяет загрузить ядра GPU)."
-                )
-                st.markdown("⬇️")
-                
-                st.success(
-                    f"**📤 Шаг 5: Вывод и Детокенизация (Detokenization)**\n\n"
-                    f"Сгенерированные токены переводятся обратно в человеческий текст и выводятся пользователю. "
-                    f"Всего сгенерировано **{p_out} токенов** со средней скоростью **{res.throughput_tok_s:.0f} токенов/сек**."
-                )
+
+                # Render active step card
+                if active_step == 0:
+                    st.markdown(
+                        f"""
+                        <div class="active-step-card">
+                            <h3 style="margin-top:0; color:#00c6ff; border:none !important;">📥 Шаг 1: Токенизация (Tokenization)</h3>
+                            <p style="color:#e2e8f0; font-size:14.5px; line-height:1.6;">
+                                Входной текстовый промпт разбивается на элементарные токены (словоформы, слоги или отдельные символы) 
+                                с помощью словаря токенизатора. Графический чип (GPU) не может работать напрямую со строками — 
+                                он оперирует исключительно числовыми идентификаторами токенов.
+                            </p>
+                            <div style="background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.05); padding:15px; border-radius:10px; margin-top:15px;">
+                                <ul style="margin:0; padding-left:20px; color:#a0aec0; font-size:14px; display:flex; flex-direction:column; gap:8px;">
+                                    <li>📝 <b>Длина вашего промпта (P_in):</b> <span style="color:#fff; font-weight:600;">{p_in} токенов</span></li>
+                                    <li>🧩 <b>Параллельный батч (Batch):</b> <span style="color:#fff; font-weight:600;">{batch} параллельных запросов</span></li>
+                                    <li>🧠 <b>Размер скрытого слоя модели (d_model):</b> <span style="color:#fff; font-weight:600;">{d_model} параметров</span></li>
+                                    <li>⚙️ <b>Аппаратный процесс:</b> Числа-токены переводятся в плотные векторы (Embeddings) размерности <code>{d_model}</code> путем аппаратного поиска в таблице весов эмбеддингов. Этот процесс занимает ничтожно мало времени во VRAM.</li>
+                                </ul>
+                            </div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
+                elif active_step == 1:
+                    st.markdown(
+                        f"""
+                        <div class="active-step-card">
+                            <h3 style="margin-top:0; color:#00c6ff; border:none !important;">⚡ Шаг 2: Фаза Prefill (Насыщение / Обработка промпта)</h3>
+                            <p style="color:#e2e8f0; font-size:14.5px; line-height:1.6;">
+                                Графический процессор считывает веса модели и обрабатывает абсолютно все <b>{p_in} токенов</b> входного текста параллельно. 
+                                Это высокоэффективный процесс с точки зрения утилизации вычислительных мощностей GPU (высокая параллельная утилизация ядер).
+                            </p>
+                            <div style="background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.05); padding:15px; border-radius:10px; margin-top:15px;">
+                                <ul style="margin:0; padding-left:20px; color:#a0aec0; font-size:14px; display:flex; flex-direction:column; gap:8px;">
+                                    <li>🧮 <b>Объем вычислений:</b> <span style="color:#fff; font-weight:600;">{prefill_flops_total:.3f} TFLOPs</span> операций (параллельное умножение матриц по всей длине промпта)</li>
+                                    <li>🕒 <b>Задержка выполнения Prefill:</b> <span style="color:#fff; font-weight:600;">{res.prefill_s * 1000:.1f} мс</span></li>
+                                    <li>📈 <b>Арифметическая интенсивность:</b> <span style="color:#00c6ff; font-weight:700;">{intensity_prefill:.1f} FLOP / byte</span> (высокая, ядра полностью загружены)</li>
+                                    <li>🚨 <b>Физический лимит:</b> фаза упирается в <span style="color:#e74c3c; font-weight:700;">{res.bottleneck_prefill.upper()}</span></li>
+                                </ul>
+                            </div>
+                            <p style="color:#a0aec0; font-size:13px; margin-top:15px; font-style:italic;">
+                                💡 Примечание: Поскольку мы перемножаем матрицы активаций промпта на веса модели одновременно для всех токенов, интенсивность превосходит «точку перелома» (Ridge Point) на многих GPU, поэтому фаза Prefill часто утилизирует чистые TFLOPS ядер GPU.
+                            </p>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
+                elif active_step == 2:
+                    st.markdown(
+                        f"""
+                        <div class="active-step-card">
+                            <h3 style="margin-top:0; color:#00c6ff; border:none !important;">💾 Шаг 3: Запись Key-Value кэша (KV Cache Storage)</h3>
+                            <p style="color:#e2e8f0; font-size:14.5px; line-height:1.6;">
+                                Чтобы не вычислять квадратичное самовнимание заново на каждом шаге генерации, векторы Ключей (Key) и Значений (Value) 
+                                для всех слоев модели сохраняются во VRAM GPU. Это критическая точка масштабирования по памяти.
+                            </p>
+                            <div style="background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.05); padding:15px; border-radius:10px; margin-top:15px;">
+                                <ul style="margin:0; padding-left:20px; color:#a0aec0; font-size:14px; display:flex; flex-direction:column; gap:8px;">
+                                    <li>📐 <b>Вес KV-кэша на токен:</b> <span style="color:#fff; font-weight:600;">{kv_tok_b:.0f} байт / токен</span></li>
+                                    <li>💾 <b>Всего выделено во VRAM:</b> <span style="color:#00c6ff; font-weight:700;">{kv_total / 1e6:.1f} MB</span> (для всего батча из {batch} запросов)</li>
+                                    <li>🧩 <b>Утилизация кэша (PagedAttention):</b> <span style="color:#fff; font-weight:600;">{kv_eff_pct:.0%} эффективного заполнения</span></li>
+                                    <li>🌐 <b>Скорость шины VRAM:</b> <span style="color:#fff; font-weight:600;">{eff_mbw / 1e9:.0f} GB/s</span> (лимитирует скорость записи и чтения кэша)</li>
+                                </ul>
+                            </div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
+                elif active_step == 3:
+                    st.markdown(
+                        f"""
+                        <div class="active-step-card">
+                            <h3 style="margin-top:0; color:#00c6ff; border:none !important;">🔄 Шаг 4: Цикл Decode (Авторегрессионная генерация токенов)</h3>
+                            <p style="color:#e2e8f0; font-size:14.5px; line-height:1.6;">
+                                Начинается последовательный процесс генерации ответа. Для генерации каждого последующего токена GPU вынужден считать 
+                                абсолютно все веса модели из памяти VRAM (<span style="color:#fff; font-weight:600;">{W / 1e9:.2f} GB</span>) ради выполнения ничтожного объема операций.
+                            </p>
+                            <div style="background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.05); padding:15px; border-radius:10px; margin-top:15px;">
+                                <ul style="margin:0; padding-left:20px; color:#a0aec0; font-size:14px; display:flex; flex-direction:column; gap:8px;">
+                                    <li>🕒 <b>Скорость генерации токена:</b> <span style="color:#fff; font-weight:600;">{res.decode_per_token_s * 1000:.1f} мс / токен</span></li>
+                                    <li>📈 <b>Арифметическая интенсивность Decode:</b> <span style="color:#ff9f43; font-weight:700;">{intensity_decode:.2f} FLOP / byte</span> (крайне низкая, в {p_in} раз ниже префилла!)</li>
+                                    <li>🚨 <b>Физический лимит:</b> фаза упирается в <span style="color:#e74c3c; font-weight:700;">{res.bottleneck_decode.upper()}</span> (Memory-bound)</li>
+                                </ul>
+                            </div>
+                            <p style="color:#a0aec0; font-size:13px; margin-top:15px; font-style:italic;">
+                                💡 Это классическое «бутылочное горлышко памяти». Вычислительные ядра GPU 95% времени простаивают, просто ожидая, пока веса перекачаются из VRAM в кэш процессора. Решается переходом на HBM3/HBM3e память с широкой шиной, квантованием (до 4/8 бит) или увеличением размера батча.
+                            </p>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
+                elif active_step == 4:
+                    st.markdown(
+                        f"""
+                        <div class="active-step-card">
+                            <h3 style="margin-top:0; color:#00c6ff; border:none !important;">📤 Шаг 5: Вывод и Детокенизация (Detokenization)</h3>
+                            <p style="color:#e2e8f0; font-size:14.5px; line-height:1.6;">
+                                Сгенерированная последовательность числовых токенов переводится обратно в понятные слова текста с использованием словаря токенизатора 
+                                и порционно отправляется пользователю (Streaming).
+                            </p>
+                            <div style="background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.05); padding:15px; border-radius:10px; margin-top:15px;">
+                                <ul style="margin:0; padding-left:20px; color:#a0aec0; font-size:14px; display:flex; flex-direction:column; gap:8px;">
+                                    <li>📝 <b>Сгенерировано ответов (P_out):</b> <span style="color:#fff; font-weight:600;">{p_out} токенов</span></li>
+                                    <li>🚀 <b>Суммарная скорость вывода системы (Throughput):</b> <span style="color:#38ef7d; font-weight:700;">{res.throughput_tok_s:.1f} токенов / сек</span></li>
+                                    <li>⏱️ <b>Полное время обработки запроса (Total Latency):</b> <span style="color:#fff; font-weight:600;">{res.total_latency_s:.2f} сек</span></li>
+                                </ul>
+                            </div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
 
             with edu_tab4:
                 st.markdown("### 🧠 Обучающая мини-викторина")
@@ -1231,6 +1751,158 @@ llama-bench/vLLM прогоны на RTX-3090, A100, RTX-5090).
                 + comm_str,
                 language="text",
             )
+
+
+# =============================================================================
+# 🔌 Анатомия GPU
+# =============================================================================
+with tab_anat:
+    st.markdown("## 🔌 Анатомия GPU: Промышленные AI-ускорители vs Бытовые видеокарты")
+    st.caption(
+        "Понимание физических различий между профессиональными HBM-видеокартами и игровыми "
+        "GDDR-чипами критически важно при масштабировании систем инференса LLM."
+    )
+
+    # 1. Interactive specifications scorecard comparison
+    st.markdown("### 📊 Интерактивное сравнение характеристик")
+    st.caption("Выберите два любых графических процессора для детального сопоставления их физических параметров.")
+
+    c_sel1, c_sel2 = st.columns(2)
+    with c_sel1:
+        gpu_a = st.selectbox("Сравниваемая видеокарта А:", list(HARDWARE_SPECS.keys()), index=0, key="anat_gpu_a")
+    with c_sel2:
+        gpu_b = st.selectbox("Сравниваемая видеокарта Б:", list(HARDWARE_SPECS.keys()), index=5 if len(HARDWARE_SPECS) > 5 else 1, key="anat_gpu_b")
+
+    spec_a = HARDWARE_SPECS[gpu_a]
+    spec_b = HARDWARE_SPECS[gpu_b]
+
+    flops_a = spec_a["peak_tflops"][16]
+    flops_b = spec_b["peak_tflops"][16]
+    bw_a = spec_a["memory_bandwidth_gbs"]
+    bw_b = spec_b["memory_bandwidth_gbs"]
+    cap_a = spec_a["memory_capacity_gb"]
+    cap_b = spec_b["memory_capacity_gb"]
+    tdp_a = spec_a.get("tdp_w", 0)
+    tdp_b = spec_b.get("tdp_w", 0)
+
+    # Render scorecard
+    st.markdown(
+        f"""
+        <div style="background: rgba(18, 22, 32, 0.4); border: 1px solid rgba(255, 255, 255, 0.06); border-radius: 16px; padding: 25px; margin-bottom: 30px; box-shadow: 0 8px 32px rgba(0,0,0,0.2); backdrop-filter: blur(10px);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                <div style="width: 42%; text-align: right;">
+                    <h3 style="margin: 0; color: #00c6ff; font-size: 22px; font-weight: 800; border: none !important;">{gpu_a}</h3>
+                    <span style="font-size: 12px; color: #a0aec0;">Карта А</span>
+                </div>
+                <div style="width: 16%; text-align: center;">
+                    <span style="background: linear-gradient(135deg, #00c6ff, #0072ff); color: white; padding: 6px 14px; border-radius: 20px; font-size: 13px; font-weight: 800; text-shadow: 0 1px 2px rgba(0,0,0,0.2);">VS</span>
+                </div>
+                <div style="width: 42%; text-align: left;">
+                    <h3 style="margin: 0; color: #38ef7d; font-size: 22px; font-weight: 800; border: none !important;">{gpu_b}</h3>
+                    <span style="font-size: 12px; color: #a0aec0;">Карта Б</span>
+                </div>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 15px;">
+                <!-- VRAM -->
+                <div>
+                    <div style="display: flex; justify-content: space-between; font-size: 13.5px; margin-bottom: 4px; color: #a0aec0;">
+                        <span style="color: #00c6ff; font-weight: 700;">{cap_a:.1f} GB VRAM</span>
+                        <b style="color: #fff; font-family: 'Outfit', sans-serif;">Объем памяти VRAM</b>
+                        <span style="color: #38ef7d; font-weight: 700;">{cap_b:.1f} GB VRAM</span>
+                    </div>
+                    <div style="display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: #1a1e29;">
+                        <div style="width: {cap_a / (cap_a + cap_b) * 100 if cap_a + cap_b > 0 else 50}%; background: #00c6ff; border-right: 1px solid #000;"></div>
+                        <div style="width: {cap_b / (cap_a + cap_b) * 100 if cap_a + cap_b > 0 else 50}%; background: #38ef7d;"></div>
+                    </div>
+                </div>
+                <!-- Bandwidth -->
+                <div>
+                    <div style="display: flex; justify-content: space-between; font-size: 13.5px; margin-bottom: 4px; color: #a0aec0;">
+                        <span style="color: #00c6ff; font-weight: 700;">{bw_a:.0f} GB/s</span>
+                        <b style="color: #fff; font-family: 'Outfit', sans-serif;">Пропускная способность шины</b>
+                        <span style="color: #38ef7d; font-weight: 700;">{bw_b:.0f} GB/s</span>
+                    </div>
+                    <div style="display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: #1a1e29;">
+                        <div style="width: {bw_a / (bw_a + bw_b) * 100 if bw_a + bw_b > 0 else 50}%; background: #00c6ff; border-right: 1px solid #000;"></div>
+                        <div style="width: {bw_b / (bw_a + bw_b) * 100 if bw_a + bw_b > 0 else 50}%; background: #38ef7d;"></div>
+                    </div>
+                </div>
+                <!-- FLOPS -->
+                <div>
+                    <div style="display: flex; justify-content: space-between; font-size: 13.5px; margin-bottom: 4px; color: #a0aec0;">
+                        <span style="color: #00c6ff; font-weight: 700;">{flops_a:.0f} TFLOPS</span>
+                        <b style="color: #fff; font-family: 'Outfit', sans-serif;">FP16 Compute (Tensor Cores)</b>
+                        <span style="color: #38ef7d; font-weight: 700;">{flops_b:.0f} TFLOPS</span>
+                    </div>
+                    <div style="display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: #1a1e29;">
+                        <div style="width: {flops_a / (flops_a + flops_b) * 100 if flops_a + flops_b > 0 else 50}%; background: #00c6ff; border-right: 1px solid #000;"></div>
+                        <div style="width: {flops_b / (flops_a + flops_b) * 100 if flops_a + flops_b > 0 else 50}%; background: #38ef7d;"></div>
+                    </div>
+                </div>
+                <!-- TDP -->
+                <div>
+                    <div style="display: flex; justify-content: space-between; font-size: 13.5px; margin-bottom: 4px; color: #a0aec0;">
+                        <span style="color: #00c6ff; font-weight: 700;">{tdp_a if tdp_a > 0 else "—"} W</span>
+                        <b style="color: #fff; font-family: 'Outfit', sans-serif;">Потребление энергии (TDP)</b>
+                        <span style="color: #38ef7d; font-weight: 700;">{tdp_b if tdp_b > 0 else "—"} W</span>
+                    </div>
+                    <div style="display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: #1a1e29;">
+                        <div style="width: {tdp_a / (tdp_a + tdp_b) * 100 if tdp_a + tdp_b > 0 else 50}%; background: #00c6ff; border-right: 1px solid #000;"></div>
+                        <div style="width: {tdp_b / (tdp_a + tdp_b) * 100 if tdp_a + tdp_b > 0 else 50}%; background: #38ef7d;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    # 2. Side-by-side graphic panels and deep comparative details
+    st.markdown("### 🔍 Сравнение физической архитектуры и внутреннего устройства")
+    
+    col_anat1, col_anat2 = st.columns(2)
+    
+    with col_anat1:
+        st.subheader("🏢 Промышленные AI-ускорители (Industrial Server Components)")
+        st.caption("Пример: NVIDIA H100 SXM5 / A100 / AMD Instinct MI300X")
+        st.image("ui/assets/enterprise_gpu.png", width="stretch", caption="Промышленный AI-ускоритель в форм-факторе SXM5")
+        
+        st.markdown(
+            """
+            * **Широкополосная память HBM (High Bandwidth Memory)**:
+              - Располагается вертикальными 3D-стеками непосредственно на одной кремниевой подложке с кристаллом GPU.
+              - Обладает колоссальной разрядностью шины (до **4096-8192 бит**), что позволяет достигать скоростей передачи данных от **2.0 до 8.0 ТБ/с** при низком энергопотреблении и компактности.
+            * **Высокоскоростная шина NVLink / NVSwitch**:
+              - Позволяет объединять видеокарты в единый виртуальный суперчип с пропускной способностью до **900 ГБ/с в обе стороны**.
+              - Полностью устраняет задержки сетевого обмена при Tensor Parallelism и Pipeline Parallelism.
+            * **Мезонинный форм-фактор SXM / OAM**:
+              - Устанавливаются напрямую на материнскую плату сервера в специальные разъемы высокой плотности. Исключает механические провисания кабелей и питается напрямую от шины 54V.
+            * **Профессиональная виртуализация и надежность**:
+              - Поддерживают технологии **MIG (Multi-Instance GPU)** и vGPU на аппаратном уровне. Оснащены ECC-памятью для защиты от битовых сбоев при длительном обучении.
+            """
+        )
+        
+    with col_anat2:
+        st.subheader("🎮 Бытовые (Игровые) Видеокарты (Consumer Gaming GPUs)")
+        st.caption("Пример: NVIDIA RTX 4090 / RTX 3090 / AMD RX 7900 XTX")
+        st.image("ui/assets/consumer_gpu.png", width="stretch", caption="Потребительская игровая видеокарта с активным вентиляторным охлаждением")
+        
+        st.markdown(
+            """
+            * **Классическая память GDDR6 / GDDR7**:
+              - Распаяна на печатной плате дискретными микросхемами вокруг GPU.
+              - Подключается по узкой шине (**192-384 бит**). Для компенсации пропускной способности (макс. **1.0-1.5 ТБ/с**) работает на экстремально высоких тактовых частотах, что вызывает сильный нагрев.
+            * **Стандартный интерфейс PCIe Gen4 / Gen5**:
+              - Видеокарты общаются друг с другом через системную шину материнской платы PCIe (максимум **64 ГБ/с** для Gen5 x16) с проходом через ОЗУ хост-процессора.
+              - Внутренние задержки и ограничения вызывают огромный пенальти при попытке распределить инференс (TP/PP).
+            * **Потребительский форм-фактор PCIe со слотовым охлаждением**:
+              - Подключаются в стандартный слот расширения, требуют громоздкого воздушного охлаждения (2.5-4 слота) и питаются от внешних кабелей 12VHPWR.
+            * **Программные ограничения драйвера**:
+              - Искусственно заблокированы функции vGPU, MIG, ограничен объем VRAM (не более 24 ГБ на RTX 4090) для разделения потребительского и корпоративного секторов.
+            """
+        )
+
+    st.markdown("---")
 
 
 # =============================================================================
