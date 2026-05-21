@@ -106,14 +106,17 @@ def apply_preset(name: str) -> None:
 # Session-state defaults (must run before widgets read these keys)
 # ---------------------------------------------------------------------------
 DEFAULTS = {
+    "ui_mode": "Базовый (Simple)",
     "sb_hw": "1xA100",
     "sb_engine": "vllm",
     "sb_model": 7.0,
     "sb_bits": 16,
     "sb_precision": "Unquantized",
     "sb_preset_active": None,
+    "sb_custom_model_arch": False,
     "sb_custom_b": 0.0,
     "sb_custom_active": 0.0,
+    "sb_preset_selector": "Индивидуальная настройка (Manual)",
     # workload (Эмуляция tab)
     "wk_p_in": 256,
     "wk_p_out": 64,
@@ -141,27 +144,45 @@ DEFAULTS = {
 for _k, _v in DEFAULTS.items():
     st.session_state.setdefault(_k, _v)
 
-
 # ---------------------------------------------------------------------------
 # Sidebar — persistent configuration
 # ---------------------------------------------------------------------------
 with st.sidebar:
     st.title("🎯 Конфигурация")
-    st.caption("Эти настройки видят все вкладки.")
+    
+    st.selectbox(
+        "🎓 Режим интерфейса",
+        ["Базовый (Simple)", "🎓 Учебный (Pedagogical)", "⚙️ Продвинутый (Advanced)"],
+        key="ui_mode",
+        help="Базовый — скрывает сложные настройки и формулы. Учебный — показывает пошаговый разбор формул с вашими числами, график Roofline и жизненный цикл токена. Продвинутый — полный доступ к тонким параметрам и экспертной аналитике."
+    )
+    
+    st.divider()
 
     st.markdown("**📌 Готовые сценарии**")
-    st.caption("Один клик — заполнит всё ниже.")
-    cols = st.columns(2)
-    for i, name in enumerate(PRESETS):
-        cols[i % 2].button(
-            name, on_click=apply_preset, args=[name],
-            width="stretch",
-            type="primary" if st.session_state["sb_preset_active"] == name else "secondary",
-        )
+    preset_names = ["Индивидуальная настройка (Manual)"] + list(PRESETS.keys())
+    active_preset = st.session_state.get("sb_preset_active")
+    default_idx = preset_names.index(active_preset) if active_preset in PRESETS else 0
+    
+    def on_preset_change():
+        chosen = st.session_state["sb_preset_selector"]
+        if chosen == "Индивидуальная настройка (Manual)":
+            st.session_state["sb_preset_active"] = None
+        else:
+            apply_preset(chosen)
+            
+    st.selectbox(
+        "Выберите готовый сценарий",
+        preset_names,
+        index=default_idx,
+        key="sb_preset_selector",
+        on_change=on_preset_change,
+        help="Выбор готового сценария автоматически заполнит поля железа, движка и модели."
+    )
 
     st.divider()
 
-    st.markdown("**🛠 Или вручную:**")
+    st.markdown("**🛠 Ручная настройка:**")
     st.selectbox("Железо", list(HARDWARE_SPECS.keys()), key="sb_hw")
     st.selectbox("Движок", list(ENGINE_DEFAULTS.keys()), key="sb_engine")
 
@@ -178,16 +199,17 @@ with st.sidebar:
 
     with st.expander("⚙️ Дополнительно"):
         st.text_input("Precision label (для калибровки)", key="sb_precision",
-                      help="Используется при поиске α/β в "
-                           "results/calibrated_coefficients.csv. "
-                           "Типичные значения: Unquantized, AWQ.4bit, "
-                           "GPTQ.4bit, BnB.4bit, Q4_K (4.91bpw).")
-        st.number_input("Custom size (B), 0 = use preset", min_value=0.0,
-                        max_value=2000.0, value=0.0, step=0.5, key="sb_custom_b",
-                        help="Перебивает preset — полезно для нестандартных моделей.")
-        st.number_input("Active params (B), MoE override (0 = preset)",
-                        min_value=0.0, max_value=2000.0, value=0.0, step=0.5,
-                        key="sb_custom_active")
+                      help="Используется при поиске α/β в results/calibrated_coefficients.csv.")
+        st.checkbox("Своя архитектура модели", key="sb_custom_model_arch",
+                    help="Позволяет вручную задать размер параметров и число активных параметров MoE.")
+        if st.session_state.get("sb_custom_model_arch", False):
+            st.number_input("Custom size (B), 0 = use preset", min_value=0.0,
+                            max_value=2000.0, value=0.0, step=0.5, key="sb_custom_b",
+                            help="Перебивает preset — полезно для нестандартных моделей.")
+            st.number_input("Active params (B), MoE override (0 = preset)",
+                            min_value=0.0, max_value=2000.0, value=0.0, step=0.5,
+                            key="sb_custom_active",
+                            help="Для MoE моделей — количество активных параметров на токен.")
 
     st.divider()
     hw_spec = HARDWARE_SPECS[st.session_state["sb_hw"]]
@@ -236,25 +258,25 @@ def build_pred_inputs() -> dict:
         "bits": cfg["bits"],
         "active_b": cfg["active_b"],
         "precision": cfg["precision"],
-        "p_in": int(s["wk_p_in"]),
-        "p_out": int(s["wk_p_out"]),
-        "batch": int(s["wk_batch"]),
-        "kv_k": float(s["adv_kv_k"]),
-        "kv_v": float(s["adv_kv_v"]),
-        "sw": int(s["adv_sw"]),
-        "head_dim": int(s["adv_hd"]),
-        "cost_per_hour": float(s["adv_cost"]),
-        "override_alpha": bool(s["adv_oa"]),
-        "alpha_in": float(s["adv_alpha"]),
-        "override_beta": bool(s["adv_ob"]),
-        "beta_in": float(s["adv_beta"]),
-        "alpha_sat_b0": float(s["adv_alpha_sat"]) if s["adv_alpha_sat"] > 0 else None,
-        "mla_kv_lora_rank": int(s["adv_mla_rank"]) if s["adv_mla_rank"] > 0 else None,
-        "mla_qk_rope_dim": int(s["adv_mla_rope"]) if s["adv_mla_rope"] > 0 else None,
-        "pp_size": int(s["adv_pp"]),
-        "comm_link": s["adv_comm_link"],
-        "comm_link_bw": float(s["adv_comm_bw"]) if s["adv_comm_bw"] > 0 else None,
-        "comm_link_latency": float(s["adv_comm_lat"]) / 1e3 if s["adv_comm_lat"] > 0 else None,
+        "p_in": int(s.get("wk_p_in", DEFAULTS["wk_p_in"])),
+        "p_out": int(s.get("wk_p_out", DEFAULTS["wk_p_out"])),
+        "batch": int(s.get("wk_batch", DEFAULTS["wk_batch"])),
+        "kv_k": float(s.get("adv_kv_k", DEFAULTS["adv_kv_k"])),
+        "kv_v": float(s.get("adv_kv_v", DEFAULTS["adv_kv_v"])),
+        "sw": int(s.get("adv_sw", DEFAULTS["adv_sw"])),
+        "head_dim": int(s.get("adv_hd", DEFAULTS["adv_hd"])),
+        "cost_per_hour": float(s.get("adv_cost", DEFAULTS["adv_cost"])),
+        "override_alpha": bool(s.get("adv_oa", DEFAULTS["adv_oa"])),
+        "alpha_in": float(s.get("adv_alpha", DEFAULTS["adv_alpha"])),
+        "override_beta": bool(s.get("adv_ob", DEFAULTS["adv_ob"])),
+        "beta_in": float(s.get("adv_beta", DEFAULTS["adv_beta"])),
+        "alpha_sat_b0": float(s.get("adv_alpha_sat", DEFAULTS["adv_alpha_sat"])) if s.get("adv_alpha_sat", DEFAULTS["adv_alpha_sat"]) > 0 else None,
+        "mla_kv_lora_rank": int(s.get("adv_mla_rank", DEFAULTS["adv_mla_rank"])) if s.get("adv_mla_rank", DEFAULTS["adv_mla_rank"]) > 0 else None,
+        "mla_qk_rope_dim": int(s.get("adv_mla_rope", DEFAULTS["adv_mla_rope"])) if s.get("adv_mla_rope", DEFAULTS["adv_mla_rope"]) > 0 else None,
+        "pp_size": int(s.get("adv_pp", DEFAULTS["adv_pp"])),
+        "comm_link": s.get("adv_comm_link", DEFAULTS["adv_comm_link"]),
+        "comm_link_bw": float(s.get("adv_comm_bw", DEFAULTS["adv_comm_bw"])) if s.get("adv_comm_bw", DEFAULTS["adv_comm_bw"]) > 0 else None,
+        "comm_link_latency": float(s.get("adv_comm_lat", DEFAULTS["adv_comm_lat"])) / 1e3 if s.get("adv_comm_lat", DEFAULTS["adv_comm_lat"]) > 0 else None,
     }
 
 
@@ -263,23 +285,33 @@ def build_pred_inputs() -> dict:
 # ---------------------------------------------------------------------------
 st.title("🧮 LLM Inference Emulator")
 
-tab_home, tab_pred, tab_form, tab_pre, tab_cal, tab_val, tab_sca = st.tabs([
-    "🏠 Старт",
-    "🎛 Эмуляция",
-    "📐 Формула",
-    "📦 Каталог",
-    "🎯 Калибровка",
-    "🧪 Валидация",
-    "📊 Pred vs Actual",
-])
+ui_mode = st.session_state.get("ui_mode", "Базовый (Simple)")
+is_edu = ui_mode == "🎓 Учебный (Pedagogical)"
+is_adv = ui_mode == "⚙️ Продвинутый (Advanced)"
+
+tabs_list = ["🏠 Эмулятор", "📦 Справочник"]
+if is_adv:
+    tabs_list.append("🔬 Аналитика")
+
+tabs = st.tabs(tabs_list)
+tab_pred = tabs[0]
+tab_pre = tabs[1]
+if is_adv:
+    tab_sca = tabs[2]
+else:
+    tab_sca = None
 
 
 # =============================================================================
-# 🏠 Старт
+# 🏠 Эмулятор
 # =============================================================================
-with tab_home:
-    st.markdown(
-        """
+
+
+with tab_pred:
+    # Sleek collapsible introduction card to declutter the dashboard
+    with st.expander("ℹ️ Что такое эмулятор инференса и как им пользоваться? (Нажмите для справки)"):
+        st.markdown(
+            """
 ### Один вопрос — один ответ
 
 > *«Сколько tok/s выдаст моя модель X на железе Y, и хватит ли VRAM?»*
@@ -291,61 +323,24 @@ llama-bench/vLLM прогоны на RTX-3090, A100, RTX-5090).
 
 ### Как пользоваться
 
-1. **Слева в сайдбаре** выбери железо + движок + модель — или нажми
-   готовый сценарий.
-2. **Вкладка «🎛 Эмуляция»** — задай нагрузку (P_in / P_out / batch),
-   получи prefill, decode, throughput, memory + почему именно это число.
-3. **Вкладка «🎯 Калибровка»** — посмотри откуда взялись коэффициенты для
-   твоего сочетания (HW × engine × precision).
-4. **Вкладка «🧪 Валидация»** — насколько эмулятор сходится с реальными
-   опубликованными бенчмарками.
-        """
-    )
+1. **Слева в сайдбаре** выберите железо + движок + модель (или готовый пресет).
+2. **Ниже на этой странице** задайте нагрузку (входные и выходные токены, размер батча).
+3. Нажмите кнопку **🔮 Рассчитать инференс**! Вы получите prefill, decode, throughput, распределение памяти и разбор всех бутылочных горлышек.
+            """
+        )
+        c_i1, c_i2, c_i3 = st.columns(3)
+        with c_i1:
+            st.success("**±10-20%** внутри калиброванной области\n\n"
+                       "RTX-3090 / A100-40 / A10 / T4 / 2×5090 — real-world.")
+        with c_i2:
+            st.warning("**±30-60%** на extrapolation\n\n"
+                       "Новое железо без калибровки (H100, B200) — формула "
+                       "может недооценивать throughput.")
+        with c_i3:
+            st.info("**Не SLA-инструмент**\n\n"
+                    "Roofline даёт верхнюю границу. "
+                    "Финальный замер — на реальном железе.")
 
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.success("**±10-20%** внутри откалиброванной области\n\n"
-                   "RTX-3090 / A100-40 / A10 / T4 / 2×5090 — real-world.")
-    with c2:
-        st.warning("**±30-60%** на extrapolation\n\n"
-                   "Новое железо без калибровки (H100, B200) — формула "
-                   "может недооценивать throughput.")
-    with c3:
-        st.info("**Не SLA-инструмент**\n\n"
-                "Roofline даёт верхнюю границу. "
-                "Финальный замер — на реальном железе.")
-
-    st.divider()
-
-    st.markdown("### 🚀 Быстрые сценарии")
-    st.caption("Клик — заполнит сайдбар, переходи на «🎛 Эмуляция».")
-
-    grid_cols = st.columns(3)
-    descriptions = {
-        "🤖 7B чатбот / A100": "Базовый сценарий: Llama-7B / Qwen-7B AWQ на одном A100. "
-                              "Внутри откалиброванной области.",
-        "🐘 70B Q4 / 2×3090": "Llama-70B Q4_K_M, требует 2 карты для capacity. "
-                             "Pipeline-parallel (НЕ tensor-parallel).",
-        "🧠 Mixtral MoE / 1×A100": "Mixtral 8x7B (46.7B total / 12.9B active). "
-                                  "Декод читает только активные эксперты.",
-        "⚡ Self-hosted / 2×5090": "Self-validation point (§2.3). "
-                                  "Качество предсказания: −0.9% от реального.",
-        "🔬 DeepSeek-V3 / H100": "Большой MoE (671B / 37B active) с MLA. "
-                                "На 1 H100 не помещается, увидите warning.",
-        "💾 Llama-8B BF16 / H100": "Validation point (§2.4). "
-                                  "Известный gap: батч-сатурация не калиброванa для H100.",
-    }
-    for i, (name, desc) in enumerate(descriptions.items()):
-        with grid_cols[i % 3]:
-            st.button(name, key=f"home_{i}", on_click=apply_preset, args=[name],
-                      width="stretch")
-            st.caption(desc)
-
-
-# =============================================================================
-# 🎛 Эмуляция
-# =============================================================================
-with tab_pred:
     cfg = current_config()
     arch = _arch_for(cfg["n_params_b"])
 
@@ -786,6 +781,166 @@ with tab_pred:
                 f"{p2p_note}"
             )
 
+        if is_edu:
+            st.divider()
+            st.subheader("🎓 Учебный разбор: Физика и математика инференса")
+            
+            edu_tab1, edu_tab2, edu_tab3 = st.tabs([
+                "🧮 Пошаговый расчет памяти и времени",
+                "📉 Интерактивный Roofline-график",
+                "🔄 Жизненный цикл запроса к LLM"
+            ])
+            
+            with edu_tab1:
+                st.markdown("### 1. Веса модели в памяти")
+                w_params = snap["n_params_b"]
+                w_bits = snap["bits"]
+                w_gb_calc = w_params * w_bits / 8.0
+                st.markdown(
+                    f"Размер статических весов модели в VRAM рассчитывается по формуле:\n"
+                    f"$$W = N_{{params}} \\times \\frac{{bits}}{{8}}$$\n\n"
+                    f"Для вашей модели **{w_params:.1f}B** параметров и разрядности весов **{w_bits} бит**:\n"
+                    f"$$W = {w_params:.2f} \\times 10^9 \\times \\frac{{{w_bits}}}{{8}} = {w_gb_calc:.2f}\\text{{ GB}}$$"
+                )
+                
+                st.markdown("### 2. Динамический KV-кэш")
+                arch_temp = _arch_for(snap["n_params_b"])
+                L_layers = snap.get("layers") if snap.get("layers") is not None else arch_temp.get("layers", 32)
+                H_kv = snap.get("kv_heads") if snap.get("kv_heads") is not None else arch_temp.get("kv_heads", 8)
+                hd_dim = head_dim
+                kv_eff_pct = eng_spec["kv_packing_eff"]
+                
+                ctx_total = p_in + p_out
+                sw_cap_str = ""
+                if sliding_window is not None:
+                    ctx_total = min(ctx_total, sliding_window)
+                    sw_cap_str = f" (ограничено скользящим окном в {sliding_window} токенов)"
+                    
+                is_mla = snap.get("mla_kv_lora_rank") is not None and snap.get("mla_qk_rope_dim") is not None
+                if is_mla:
+                    r_lora = snap["mla_kv_lora_rank"]
+                    r_rope = snap["mla_qk_rope_dim"]
+                    kv_tok_b = L_layers * (r_lora + r_rope) * kv_k / 8.0
+                    kv_tok_formula = f"L \\times (r_{{lora}} + r_{{rope}}) \\times \\frac{{b_{{kv}}}}{{8}}"
+                    kv_tok_calc = f"{L_layers} \\times ({r_lora} + {r_rope}) \\times \\frac{{{kv_k}}}{{8}} = {kv_tok_b:.0f}\\text{{ байт/токен}}"
+                else:
+                    kv_tok_b = L_layers * H_kv * hd_dim * (kv_k + kv_v) / 8.0
+                    kv_tok_formula = f"L \\times H_{{kv}} \\times d_{{head}} \\times \\frac{{b_K + b_V}}{{8}}"
+                    kv_tok_calc = f"{L_layers} \\times {H_kv} \\times {hd_dim} \\times \\frac{{{kv_k} + {kv_v}}}{{8}} = {kv_tok_b:.0f}\\text{{ байт/токен}}"
+                    
+                kv_total_calc_bytes = kv_tok_b * ctx_total * batch / kv_eff_pct
+                kv_total_gb = kv_total_calc_bytes / 1e9
+                
+                st.markdown(
+                    f"Размер динамического кэша Key-Value рассчитывается следующим образом:\n"
+                    f"1. **Объем кэша на один токен (в байтах):**\n"
+                    f"$$KV_{{token}} = {kv_tok_formula}$$\n"
+                    f"С архитектурными параметрами выбранной модели:\n"
+                    f"$$KV_{{token}} = {kv_tok_calc}$$\n\n"
+                    f"2. **Суммарный объем кэша для всей нагрузки с учетом батча:**\n"
+                    f"$$KV_{{total}} = \\frac{{KV_{{token}} \\times (P_{{in}} + P_{{out}}) \\times Batch}}{{\\eta_{{packing}}}}$$\n\n"
+                    f"В вашем случае с батчем **{batch}**, общей длиной контекста **{p_in} + {p_out} = {p_in+p_out} токенов**{sw_cap_str} и эффективностью PagedAttention **{kv_eff_pct:.0%}**:\n"
+                    f"$$KV_{{total}} = \\frac{{{kv_tok_b:.0f} \\times {ctx_total} \\times {batch}}}{{{kv_eff_pct}}} = {kv_total_gb * 1024:.1f}\\text{{ MB}} \\approx {kv_total_gb:.3f}\\text{{ GB}}$$"
+                )
+                
+                st.markdown("### 3. Производительность и фазы инференса (TFLOPS vs. Memory)")
+                intensity_prefill = (2.0 * N_active * bs_eff * p_in_eff) / W if W > 0 else 1.0
+                intensity_decode = (2.0 * N_active * bs_eff) / W if W > 0 else 1.0
+                ridge_point = eff_flops / eff_mbw
+                
+                pre_verdict = "**Compute-bound** (ограничено ядрами вычислений)" if res.bottleneck_prefill == "compute" else "**Memory-bound** (ограничено скоростью чтения VRAM)"
+                dec_verdict = "**Compute-bound** (ограничено ядрами вычислений)" if res.bottleneck_decode == "compute" else "**Memory-bound** (ограничено скоростью чтения VRAM)"
+                
+                st.markdown(
+                    f"**Арифметическая интенсивность (Arithmetic Intensity)** — это отношение математических операций (FLOPs) к объёму считываемой памяти (Bytes).\n"
+                    f"У вашего графического процессора точка перелома (**Ridge Point**) равна: TFLOPS / MBW = **{ridge_point:.1f} FLOP/byte**.\n"
+                    f"- Если интенсивность нагрузки **выше** Ridge Point, система упирается в ядра GPU (**Compute-bound**).\n"
+                    f"- Если интенсивность нагрузки **ниже** Ridge Point, система упирается в память VRAM (**Memory-bound**).\n\n"
+                    f"**1️⃣ Фаза Prefill (Анализ prompt):**\n"
+                    f"- Математические вычисления: $2 \\times N_{{active}} \\times P_{{in}} \\times bs = 2 \\times {snap_eff_active:.1f}\\text{{B}} \\times {p_in} \\times {bs_eff:.1f} = {2.0 * snap_eff_active * p_in * bs_eff:.1f}\\text{{ TFLOPs}}$\n"
+                    f"- Арифметическая интенсивность: $2 \\times N_{{active}} \\times P_{{in}} \\times bs / W \\approx$ **{intensity_prefill:.1f} FLOP/byte**.\n"
+                    f"- Вердикт: {pre_verdict}.\n\n"
+                    f"**2️⃣ Фаза Decode (Генерация ответа):**\n"
+                    f"- Математические вычисления на шаг: $2 \\times N_{{active}} \\times bs = 2 \\times {snap_eff_active:.1f}\\text{{B}} \\times {bs_eff:.1f} = {2.0 * snap_eff_active * bs_eff / 1e3:.3f}\\text{{ TFLOPs}}$\n"
+                    f"- Арифметическая интенсивность: $2 \\times N_{{active}} \\times bs / W \\approx$ **{intensity_decode:.2f} FLOP/byte**.\n"
+                    f"- Вердикт: {dec_verdict}. Поскольку декод генерирует по одному токену, интенсивность падает в $P_{{in}}$ раз! Поэтому генерация почти всегда упирается в пропускную способность памяти."
+                )
+                
+            with edu_tab2:
+                st.markdown("### Визуализация Roofline-модели")
+                st.caption(
+                    "На этом интерактивном графике показана физическая граница возможностей выбранного GPU. "
+                    "Зеленая линия — пиковый теоретический лимит. "
+                    "Звезды показывают, где именно находятся фазы Prefill и Decode для вашей нагрузки."
+                )
+                import numpy as np
+                xs = np.logspace(-1, 4, 100)
+                ys = np.minimum(eff_flops, eff_mbw * xs) / 1e12
+                roof_df = pd.DataFrame({"Intensity": xs, "Performance": ys, "Type": "GPU Roofline Ceiling"})
+                
+                prefill_flops = 2.0 * N_active * p_in_eff * bs_eff
+                prefill_tflops = (prefill_flops / t_pre) / 1e12 if t_pre > 0 else 0.0
+                
+                decode_flops = 2.0 * N_active * bs_eff
+                decode_tflops = (decode_flops / t_dec_base) / 1e12 if t_dec_base > 0 else 0.0
+                
+                pts_df = pd.DataFrame([
+                    {"Intensity": intensity_prefill, "Performance": prefill_tflops, "Phase": "⭐ Prefill Phase (Prompt)"},
+                    {"Intensity": intensity_decode, "Performance": decode_tflops, "Phase": "⭐ Decode Phase (Generation)"}
+                ])
+                
+                line_chart = alt.Chart(roof_df).mark_line(color="#2ca02c", strokeWidth=3).encode(
+                    x=alt.X("Intensity:Q", scale=alt.Scale(type="log"), title="Арифметическая интенсивность (FLOP / Byte)"),
+                    y=alt.Y("Performance:Q", scale=alt.Scale(type="log"), title="Производительность (TFLOPS)"),
+                    tooltip=["Intensity", "Performance"]
+                )
+                
+                pts_chart = alt.Chart(pts_df).mark_point(size=220, filled=True, color="#d62728").encode(
+                    x="Intensity:Q",
+                    y="Performance:Q",
+                    color=alt.Color("Phase:N", legend=alt.Legend(title="Фазы инференса")),
+                    tooltip=["Phase", alt.Tooltip("Intensity:Q", format=".2f"), alt.Tooltip("Performance:Q", format=".2f")]
+                )
+                
+                st.altair_chart((line_chart + pts_chart).properties(height=350), width="stretch")
+                st.caption("Если точка лежит на горизонтальном участке зеленой линии — она ограничена Compute (ядрами). Если на наклонном — Memory (памятью).")
+                
+            with edu_tab3:
+                st.markdown("### 🔄 Жизненный цикл обработки вашего запроса в GPU:")
+                
+                st.info(
+                    "**📥 Шаг 1: Токенизация (Tokenization)**\n\n"
+                    "Ваш входной текст разбивается на токены (словоформы или части слов). "
+                    f"Ваш промпт преобразован в **{p_in} токенов**."
+                )
+                st.markdown("⬇️")
+                st.success(
+                    f"**⚡ Шаг 2: Фаза Prefill (Насыщение)**\n\n"
+                    f"GPU считывает веса модели и обрабатывает все **{p_in} токенов** промпта параллельно в один проход. "
+                    "Это требует огромных параллельных вычислений на CUDA-ядрах. "
+                    f"Занимает **{res.prefill_s * 1000:.0f} мс** и упирается в **{res.bottleneck_prefill}**."
+                )
+                st.markdown("⬇️")
+                st.info(
+                    f"**💾 Шаг 3: Запись в KV-кэш (KV Cache Storage)**\n\n"
+                    f"Для каждого из {p_in} токенов промпта вычисляются векторы ключей (Key) и значений (Value). "
+                    f"Они сохраняются во VRAM (динамически выделено **{kv_total / 1e9:.3f} GB**), чтобы избежать квадратичного пересчета внимания на последующих шагах."
+                )
+                st.markdown("⬇️")
+                st.warning(
+                    f"**🔄 Шаг 4: Цикл Decode (Авторегрессия)**\n\n"
+                    f"Модель начинает генерировать ответ последовательно, токен за токеном. На генерацию каждого из **{p_out} токенов** ответа "
+                    f"GPU вынужден считывать из памяти VRAM абсолютно **все веса модели ({W / 1e9:.1f} GB)**. "
+                    f"Каждый шаг занимает **{res.decode_per_token_s * 1000:.1f} мс/ток** и упирается в **{res.bottleneck_decode}**."
+                )
+                st.markdown("⬇️")
+                st.success(
+                    f"**📤 Шаг 5: Вывод и Детокенизация (Detokenization)**\n\n"
+                    f"Сгенерированные токены переводятся обратно в человеческий текст и выводятся пользователю. "
+                    f"Всего сгенерировано **{p_out} токенов** со средней скоростью **{res.throughput_tok_s:.0f} токенов/сек**."
+                )
+            st.divider()
+
         with st.expander("🔢 Сырые числа (W, C, MBW, batch_eff)"):
             alpha_eff_str = f"alpha_effective (MFU)   = {res.alpha_eff:.4f}\n" if res.alpha_eff is not None else ""
             mla_str = ""
@@ -828,62 +983,60 @@ with tab_pred:
 
 
 # =============================================================================
-# 📐 Формула
-# =============================================================================
-with tab_form:
-    st.markdown("## Roofline-модель LLM-инференса\n"
-                "Две независимые фазы, каждая ограничена `max(compute, memory)`.")
-    st.latex(r"""
-    t_{\text{prefill}} \;=\; \max\!\left(
-      \underbrace{\tfrac{2\,N_{\text{active}}\,P_{\text{in}}\,\text{bs}}{C\cdot\alpha}}_{\text{compute path}},\;\;
-      \underbrace{\tfrac{W}{\text{MBW}}}_{\text{at least one weight pass}}
-    \right)
-    """)
-    st.latex(r"""
-    t_{\text{decode}} \;=\; \max\!\left(
-      \underbrace{\tfrac{W\cdot N_{\text{active}}/N}{\text{MBW}\cdot\beta}}_{\text{memory path (MoE-aware)}},\;\;
-      \underbrace{\tfrac{2\,N_{\text{active}}\,\text{bs}}{C\cdot\alpha}}_{\text{compute path}}
-    \right)
-    \;+\; t_{\text{KV}}
-    """)
-    st.latex(r"""
-    t_{\text{KV}} \;=\; \frac{L\cdot H_{kv}\cdot d_{\text{head}}\cdot (b_K + b_V)/8 \;\cdot\; \text{avg\_ctx}}{\text{MBW}\cdot\beta}
-    """)
-    st.latex(r"""
-    \text{throughput} \;=\; \frac{\text{bs}_{\text{eff}}}{t_{\text{decode}}},
-    \qquad
-    \text{bs}_{\text{eff}} \;=\; \min\!\left(\text{bs},\;\max\!\big(1,\;\tfrac{\text{bs}_{\max}\cdot\text{bs}}{\text{bs}+\text{bs}_{50\%}}\big)\right)
-    """)
-
-    st.markdown("### Расшифровка")
-    df_vars = pd.DataFrame([
-        ("N", "model parameters (e.g. 7e9 for 7B)", "штук"),
-        ("N_active", "active parameters per token (MoE: routed experts only)", "штук"),
-        ("W = N · bits / 8", "weight bytes", "B"),
-        ("C", "peak FLOPS for the precision (HW spec)", "FLOPS"),
-        ("MBW", "memory bandwidth (HW spec)", "B/s"),
-        ("α", "Model FLOPs Utilization in prefill (engine-specific, 0.04–0.65)", "—"),
-        ("β", "Memory Bandwidth Utilization in decode (engine-specific, 0.20–0.95)", "—"),
-        ("bs_max, bs_50%", "Hill-curve batch saturation (continuous batching)", "—"),
-        ("L", "transformer layers", "—"),
-        ("H_kv, d_head", "KV heads × per-head dimension (GQA/MLA aware)", "—"),
-        ("b_K, b_V", "bits per element for K/V cache (16/8/4)", "bits"),
-        ("sliding_window", "max KV tokens kept (Mistral/Gemma/V4); else unbounded", "tokens"),
-        ("tp_size, tp_eff", "tensor-parallel size & efficiency (multi-GPU)", "—"),
-    ], columns=["символ", "что значит", "единица"])
-    st.dataframe(df_vars, width="stretch", hide_index=True)
-
-    st.info(
-        "**Где в коде:** `emulator/formula.py::predict()` — single source of truth. "
-        "Спецификации железа — `emulator/hardware.py`, дефолты движков — `emulator/engines.py`. "
-        "Калиброванные перекрытия читаются из `results/calibrated_coefficients.csv`."
-    )
-
-
-# =============================================================================
-# 📦 Каталог
+# 📦 Справочник
 # =============================================================================
 with tab_pre:
+    st.markdown("## 📖 Обучающий Справочник параметров и формул")
+
+    with st.expander("📐 Теория: Математические формулы Roofline-модели"):
+        st.markdown("### Roofline-модель LLM-инференса\n"
+                    "Две независимые фазы, каждая ограничена `max(compute, memory)`.")
+        st.latex(r"""
+        t_{\text{prefill}} \;=\; \max\!\left(
+          \underbrace{\tfrac{2\,N_{\text{active}}\,P_{\text{in}}\,\text{bs}}{C\cdot\alpha}}_{\text{compute path}},\;\;
+          \underbrace{\tfrac{W}{\text{MBW}}}_{\text{at least one weight pass}}
+        \right)
+        """)
+        st.latex(r"""
+        t_{\text{decode}} \;=\; \max\!\left(
+          \underbrace{\tfrac{W\cdot N_{\text{active}}/N}{\text{MBW}\cdot\beta}}_{\text{memory path (MoE-aware)}},\;\;
+          \underbrace{\tfrac{2\,N_{\text{active}}\,\text{bs}}{C\cdot\alpha}}_{\text{compute path}}
+        \right)
+        \;+\; t_{\text{KV}}
+        """)
+        st.latex(r"""
+        t_{\text{KV}} \;=\; \frac{L\cdot H_{kv}\cdot d_{\text{head}}\cdot (b_K + b_V)/8 \;\cdot\; \text{avg\_ctx}}{\text{MBW}\cdot\beta}
+        """)
+        st.latex(r"""
+        \text{throughput} \;=\; \frac{\text{bs}_{\text{eff}}}{t_{\text{decode}}},
+        \qquad
+        \text{bs}_{\text{eff}} \;=\; \min\!\left(\text{bs},\;\max\!\big(1,\;\tfrac{\text{bs}_{\max}\cdot\text{bs}}{\text{bs}+\text{bs}_{50\%}}\big)\right)
+        """)
+
+        st.markdown("### Расшифровка переменных")
+        df_vars = pd.DataFrame([
+            ("N", "model parameters (e.g. 7e9 for 7B)", "штук"),
+            ("N_active", "active parameters per token (MoE: routed experts only)", "штук"),
+            ("W = N · bits / 8", "weight bytes", "B"),
+            ("C", "peak FLOPS for the precision (HW spec)", "FLOPS"),
+            ("MBW", "memory bandwidth (HW spec)", "B/s"),
+            ("α", "Model FLOPs Utilization in prefill (engine-specific, 0.04–0.65)", "—"),
+            ("β", "Memory Bandwidth Utilization in decode (engine-specific, 0.20–0.95)", "—"),
+            ("bs_max, bs_50%", "Hill-curve batch saturation (continuous batching)", "—"),
+            ("L", "transformer layers", "—"),
+            ("H_kv, d_head", "KV heads × per-head dimension (GQA/MLA aware)", "—"),
+            ("b_K, b_V", "bits per element for K/V cache (16/8/4)", "bits"),
+            ("sliding_window", "max KV tokens kept (Mistral/Gemma/V4); else unbounded", "tokens"),
+            ("tp_size, tp_eff", "tensor-parallel size & efficiency (multi-GPU)", "—"),
+        ], columns=["символ", "что значит", "единица"])
+        st.dataframe(df_vars, width="stretch", hide_index=True)
+
+        st.info(
+            "**Где в коде:** `emulator/formula.py::predict()` — single source of truth. "
+            "Спецификации железа — `emulator/hardware.py`, дефолты движков — `emulator/engines.py`. "
+            "Калиброванные перекрытия читаются из `results/calibrated_coefficients.csv`."
+        )
+
     cur_hw = st.session_state["sb_hw"]
     cur_eng = st.session_state["sb_engine"]
     cur_model = st.session_state["sb_model"]
@@ -941,227 +1094,228 @@ with tab_pre:
         })
     st.dataframe(pd.DataFrame(arch_rows), width="stretch", hide_index=True)
 
-
 # =============================================================================
-# 🎯 Калибровка
+# 🔬 Аналитика
 # =============================================================================
-with tab_cal:
-    cur_hw = st.session_state["sb_hw"]
-    cur_eng = st.session_state["sb_engine"]
-    cur_prec = st.session_state["sb_precision"]
+if is_adv and tab_sca is not None:
+    with tab_sca:
+        st.markdown("## 🔬 Раздел глубокой аналитики и калибровки")
+        st.caption("Этот раздел доступен только в Продвинутом режиме. Здесь сгруппированы данные калибровки, результаты валидации и графики сходимости.")
 
-    st.subheader("Откуда взялись α/β для текущего сочетания?")
-    cal = lookup_calibration(cur_hw, cur_eng, cur_prec)
-    if cal:
-        col1, col2, col3 = st.columns(3)
-        col1.metric("α median",
-                    f"{cal['alpha']:.3f}" if cal["alpha"] is not None else "—")
-        col2.metric("β median",
-                    f"{cal['beta']:.3f}" if cal["beta"] is not None else "—")
-        col3.metric("n измерений", cal["n_rows"])
-        st.success(f"✅ Сочетание **{cur_hw} × {cur_eng} × {cur_prec}** откалибровано "
-                   f"на {cal['n_rows']} реальных замерах.")
-    else:
-        eng_def = ENGINE_DEFAULTS[cur_eng]
-        st.warning(
-            f"⚠️ Сочетание **{cur_hw} × {cur_eng} × {cur_prec}** "
-            f"не имеет калибровки. Используется literature default движка: "
-            f"α={eng_def['alpha']}, β={eng_def['beta']}. "
-            f"Точность предсказания может пострадать."
-        )
+        cal_sub, val_sub, pva_sub = st.tabs([
+            "🎯 Калибровочные коэффициенты",
+            "🧪 Валидация против бенчмарков",
+            "📊 Predicted vs Actual (9.9k точек)"
+        ])
 
-    st.divider()
+        with cal_sub:
+            cur_hw = st.session_state["sb_hw"]
+            cur_eng = st.session_state["sb_engine"]
+            cur_prec = st.session_state["sb_precision"]
 
-    st.subheader("Все откалиброванные сочетания")
-    df_cal = load_calibration()
-    if df_cal.empty:
-        st.warning("`results/calibrated_coefficients.csv` не найден.")
-    else:
-        cols = st.columns(2)
-        with cols[0]:
-            hw_filter = st.multiselect("Фильтр по железу",
-                                       sorted(df_cal["hw"].unique()),
-                                       default=list(df_cal["hw"].unique()))
-        with cols[1]:
-            eng_filter = st.multiselect("Фильтр по движку",
-                                        sorted(df_cal["backend"].unique()),
-                                        default=list(df_cal["backend"].unique()))
-        view = df_cal[df_cal["hw"].isin(hw_filter) & df_cal["backend"].isin(eng_filter)]
-        st.dataframe(view, width="stretch", hide_index=True)
-        st.caption(
-            f"{len(view)} строк / всего {len(df_cal)}. "
-            "p25/p75 — интерквартильный диапазон по сырым (α, β) с каждой "
-            "бенчмарк-точки."
-        )
-
-        st.markdown("### α по железу")
-        chart = alt.Chart(view).mark_circle(size=120, opacity=0.7).encode(
-            x=alt.X("alpha_median:Q", title="α median"),
-            y=alt.Y("hw:N", sort=None),
-            color=alt.Color("backend:N", legend=alt.Legend(title="движок")),
-            size=alt.Size("n_rows:Q", title="n rows"),
-            tooltip=["hw", "backend", "precision_label", "alpha_median",
-                     "beta_median", "n_rows"],
-        ).properties(height=300)
-        st.altair_chart(chart, width="stretch")
-
-    st.subheader("Медианная ошибка по железу (calibrated vs uncalibrated)")
-    df_err = load_error_summary()
-    if not df_err.empty:
-        st.dataframe(df_err, width="stretch", hide_index=True)
-        st.caption(
-            "`prefill_med` / `decode_med` — медианная относительная ошибка "
-            "`|pred − obs| / obs`. Ближе к нулю → лучше. "
-            "`coarse` / `fine` — гранулярность калибровки (по precision vs +attention)."
-        )
-
-
-# =============================================================================
-# 🧪 Валидация
-# =============================================================================
-with tab_val:
-    st.subheader("Cross-check — формула vs внешние бенчмарки")
-    st.caption(
-        "Каждая точка — реальный опубликованный замер (или наш собственный) "
-        "и предсказание формулы для того же сценария. "
-        "См. `docs/BENCHMARK_SOURCES.md §2`."
-    )
-
-    df_val = pd.DataFrame(VALIDATION_POINTS)
-    df_show = df_val.assign(
-        Δ=df_val["delta_pct"].map(lambda x: f"{x:+.1f}%"),
-    )[["id", "hw", "engine", "scenario", "metric", "real", "pred", "unit",
-       "Δ", "verdict", "comment"]]
-    st.dataframe(df_show, width="stretch", hide_index=True)
-
-    st.markdown("### Δ (отклонение, %)")
-    st.caption(
-        "Отрицательный Δ = эмулятор недооценивает реальную метрику. "
-        "Серые пунктиры — ±20% (рабочий коридор для roofline)."
-    )
-    chart = alt.Chart(df_val).mark_bar().encode(
-        x=alt.X("delta_pct:Q", title="Δ %"),
-        y=alt.Y("id:N", sort=None, title="benchmark id"),
-        color=alt.condition(
-            alt.datum.delta_pct < 0,
-            alt.value("#f58518"),
-            alt.value("#54a24b"),
-        ),
-        tooltip=["id", "hw", "engine", "metric", "real", "pred",
-                 alt.Tooltip("delta_pct:Q", format="+.1f")],
-    ).properties(height=240)
-    rule = alt.Chart(pd.DataFrame({"x": [-20, 20]})).mark_rule(
-        strokeDash=[4, 4], color="#999"
-    ).encode(x="x:Q")
-    st.altair_chart(chart + rule, width="stretch")
-
-    st.markdown("### Источники")
-    for v in VALIDATION_POINTS:
-        st.markdown(f"- **{v['id']}** — [{v['source']}]({v['url']})")
-
-
-# =============================================================================
-# 📊 Predicted vs Actual
-# =============================================================================
-with tab_sca:
-    st.subheader("Predicted vs Actual — все 9.9k бенчмарк-точек")
-    st.caption(
-        "Каждая точка из LLM-Perf Leaderboard / собственных замеров. "
-        "Идеальное предсказание лежит на диагонали."
-    )
-
-    df_pva = load_pred_vs_actual()
-    if df_pva.empty:
-        st.warning("`results/prediction_vs_actual.csv` не найден.")
-    else:
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            modes = sorted(df_pva["mode"].unique())
-            preferred = next((m for m in ("fine", "coarse") if m in modes), modes[0])
-            mode = st.selectbox("Mode", modes, index=modes.index(preferred),
-                                help="`fine` — калибровка по (HW, engine, precision, attention). "
-                                     "`coarse` — без attention. "
-                                     "`uncalibrated` — literature default.")
-        with c2:
-            hws = sorted(df_pva["hw"].unique())
-            hw_filter = st.multiselect("Hardware", hws, default=hws)
-        with c3:
-            metric = st.radio("Метрика", ["prefill", "decode"], horizontal=True)
-        with c4:
-            plot_type = st.radio("Тип графика", ["Scatter Plot", "Density Heatmap"], horizontal=True,
-                                 index=1,
-                                 help="Scatter Plot показывает отдельные точки (лимит 5k). Density Heatmap строит красивую 2D-гистограмму плотности для всех 9.9k точек без лагов.")
-
-        sub = df_pva[(df_pva["mode"] == mode) & (df_pva["hw"].isin(hw_filter))].copy()
-        if metric == "prefill":
-            sub = sub[(sub["prefill_obs"] > 0) & (sub["prefill_pred"] > 0)]
-            sub["obs"] = sub["prefill_obs"]
-            sub["pred"] = sub["prefill_pred"]
-            sub["rel_err"] = sub["prefill_rel_err"]
-            unit = "s"
-        else:
-            sub = sub[(sub["decode_tps_obs"] > 0) & (sub["decode_tps_pred"] > 0)]
-            sub["obs"] = sub["decode_tps_obs"]
-            sub["pred"] = sub["decode_tps_pred"]
-            sub["rel_err"] = sub["decode_rel_err"]
-            unit = "tok/s"
-
-        if sub.empty:
-            st.info("Нет данных под выбранные фильтры.")
-        else:
-            import numpy as np
-            if plot_type == "Density Heatmap":
-                # Compute log10 values for beautiful grid alignment
-                sub["log_obs"] = np.log10(sub["obs"])
-                sub["log_pred"] = np.log10(sub["pred"])
-                
-                heatmap = alt.Chart(sub).mark_rect().encode(
-                    x=alt.X("log_obs:Q", bin=alt.Bin(maxbins=35), title=f"observed ({unit}, log10)"),
-                    y=alt.Y("log_pred:Q", bin=alt.Bin(maxbins=35), title=f"predicted ({unit}, log10)"),
-                    color=alt.Color("count():Q", scale=alt.Scale(scheme="viridis"), title="Точек в бине"),
-                    tooltip=[
-                        alt.Tooltip("count():Q", title="Точек в бине"),
-                    ]
-                )
-                
-                lo = max(min(sub["log_obs"].min(), sub["log_pred"].min()), -4.0)
-                hi = max(sub["log_obs"].max(), sub["log_pred"].max())
-                diag = alt.Chart(pd.DataFrame({"x": [lo, hi]})).mark_line(
-                    color="#f58518", strokeDash=[4, 4], strokeWidth=2
-                ).encode(x="x:Q", y="x:Q")
-                
-                st.altair_chart((heatmap + diag).properties(height=440), width="stretch")
-                st.caption(
-                    f"Показано тепловое распределение всех {len(sub):,} бенчмарк-точек. "
-                    "Оранжевый пунктир — идеальная диагональ."
-                )
+            st.subheader("Откуда взялись α/β для текущего сочетания?")
+            cal = lookup_calibration(cur_hw, cur_eng, cur_prec)
+            if cal:
+                col1, col2, col3 = st.columns(3)
+                col1.metric("α median",
+                            f"{cal['alpha']:.3f}" if cal["alpha"] is not None else "—")
+                col2.metric("β median",
+                            f"{cal['beta']:.3f}" if cal["beta"] is not None else "—")
+                col3.metric("n измерений", cal["n_rows"])
+                st.success(f"✅ Сочетание **{cur_hw} × {cur_eng} × {cur_prec}** откалибровано "
+                           f"на {cal['n_rows']} реальных замерах.")
             else:
-                sub_capped = sub.head(5000)
-                scatter = alt.Chart(sub_capped).mark_circle(size=40, opacity=0.45).encode(
-                    x=alt.X("obs:Q", scale=alt.Scale(type="log"),
-                            title=f"observed ({unit}, log)"),
-                    y=alt.Y("pred:Q", scale=alt.Scale(type="log"),
-                            title=f"predicted ({unit}, log)"),
-                    color=alt.Color("hw:N"),
-                    tooltip=["hw", "model", "precision", "attention",
-                             alt.Tooltip("obs:Q", format=".3g"),
-                             alt.Tooltip("pred:Q", format=".3g"),
-                             alt.Tooltip("rel_err:Q", format=".2f")],
-                )
-                lo = max(min(sub_capped["obs"].min(), sub_capped["pred"].min()), 1e-4)
-                hi = max(sub_capped["obs"].max(), sub_capped["pred"].max())
-                diag = alt.Chart(pd.DataFrame({"x": [lo, hi]})).mark_line(
-                    color="#888", strokeDash=[4, 4]
-                ).encode(x="x:Q", y="x:Q")
-                st.altair_chart((scatter + diag).properties(height=440),
-                                width="stretch")
-                st.caption(
-                    f"Показано {len(sub_capped):,} из {len(sub):,} точек "
-                    "(жёсткий cap 5k чтобы Altair не тормозил). "
-                    "Диагональ — идеальное предсказание."
+                eng_def = ENGINE_DEFAULTS[cur_eng]
+                st.warning(
+                    f"⚠️ Сочетание **{cur_hw} × {cur_eng} × {cur_prec}** "
+                    f"не имеет калибровки. Используется literature default движка: "
+                    f"α={eng_def['alpha']}, β={eng_def['beta']}. "
+                    f"Точность предсказания может пострадать."
                 )
 
-            st.markdown("### Медианная ошибка по железу")
-            agg = sub.groupby("hw")["rel_err"].agg(["median", "count"]).reset_index()
-            agg.columns = ["hw", "median rel.err", "n"]
-            st.dataframe(agg, width="stretch", hide_index=True)
+            st.divider()
+
+            st.subheader("Все откалиброванные сочетания")
+            df_cal = load_calibration()
+            if df_cal.empty:
+                st.warning("`results/calibrated_coefficients.csv` не найден.")
+            else:
+                cols = st.columns(2)
+                with cols[0]:
+                    hw_filter = st.multiselect("Фильтр по железу",
+                                               sorted(df_cal["hw"].unique()),
+                                               default=list(df_cal["hw"].unique()))
+                with cols[1]:
+                    eng_filter = st.multiselect("Фильтр по движку",
+                                                sorted(df_cal["backend"].unique()),
+                                                default=list(df_cal["backend"].unique()))
+                view = df_cal[df_cal["hw"].isin(hw_filter) & df_cal["backend"].isin(eng_filter)]
+                st.dataframe(view, width="stretch", hide_index=True)
+                st.caption(
+                    f"{len(view)} строк / всего {len(df_cal)}. "
+                    "p25/p75 — интерквартильный диапазон по сырым (α, β) с каждой "
+                    "бенчмарк-точки."
+                )
+
+                st.markdown("### α по железу")
+                chart = alt.Chart(view).mark_circle(size=120, opacity=0.7).encode(
+                    x=alt.X("alpha_median:Q", title="α median"),
+                    y=alt.Y("hw:N", sort=None),
+                    color=alt.Color("backend:N", legend=alt.Legend(title="движок")),
+                    size=alt.Size("n_rows:Q", title="n rows"),
+                    tooltip=["hw", "backend", "precision_label", "alpha_median",
+                             "beta_median", "n_rows"],
+                ).properties(height=300)
+                st.altair_chart(chart, width="stretch")
+
+            st.subheader("Медианная ошибка по железу (calibrated vs uncalibrated)")
+            df_err = load_error_summary()
+            if not df_err.empty:
+                st.dataframe(df_err, width="stretch", hide_index=True)
+                st.caption(
+                    "`prefill_med` / `decode_med` — медианная относительная ошибка "
+                    "`|pred − obs| / obs`. Ближе к нулю → лучше. "
+                    "`coarse` / `fine` — гранулярность калибровки (по precision vs +attention)."
+                )
+
+        with val_sub:
+            st.subheader("Cross-check — формула vs внешние бенчмарки")
+            st.caption(
+                "Каждая точка — реальный опубликованный замер (или наш собственный) "
+                "и предсказание формулы для того же сценария. "
+                "См. `docs/BENCHMARK_SOURCES.md §2`."
+            )
+
+            df_val = pd.DataFrame(VALIDATION_POINTS)
+            df_show = df_val.assign(
+                Δ=df_val["delta_pct"].map(lambda x: f"{x:+.1f}%"),
+            )[["id", "hw", "engine", "scenario", "metric", "real", "pred", "unit",
+               "Δ", "verdict", "comment"]]
+            st.dataframe(df_show, width="stretch", hide_index=True)
+
+            st.markdown("### Δ (отклонение, %)")
+            st.caption(
+                "Отрицательный Δ = эмулятор недооценивает реальную метрику. "
+                "Серые пунктиры — ±20% (рабочий коридор для roofline)."
+            )
+            chart = alt.Chart(df_val).mark_bar().encode(
+                x=alt.X("delta_pct:Q", title="Δ %"),
+                y=alt.Y("id:N", sort=None, title="benchmark id"),
+                color=alt.condition(
+                    alt.datum.delta_pct < 0,
+                    alt.value("#f58518"),
+                    alt.value("#54a24b"),
+                ),
+                tooltip=["id", "hw", "engine", "metric", "real", "pred",
+                         alt.Tooltip("delta_pct:Q", format="+.1f")],
+            ).properties(height=240)
+            rule = alt.Chart(pd.DataFrame({"x": [-20, 20]})).mark_rule(
+                strokeDash=[4, 4], color="#999"
+            ).encode(x="x:Q")
+            st.altair_chart(chart + rule, width="stretch")
+
+            st.markdown("### Источники")
+            for v in VALIDATION_POINTS:
+                st.markdown(f"- **{v['id']}** — [{v['source']}]({v['url']})")
+
+        with pva_sub:
+            st.subheader("Predicted vs Actual — все 9.9k бенчмарк-точек")
+            st.caption(
+                "Каждая точка из LLM-Perf Leaderboard / собственных замеров. "
+                "Идеальное предсказание лежит на диагонали."
+            )
+
+            df_pva = load_pred_vs_actual()
+            if df_pva.empty:
+                st.warning("`results/prediction_vs_actual.csv` не найден.")
+            else:
+                c1, c2, c3, c4 = st.columns(4)
+                with c1:
+                    modes = sorted(df_pva["mode"].unique())
+                    preferred = next((m for m in ("fine", "coarse") if m in modes), modes[0])
+                    mode = st.selectbox("Mode", modes, index=modes.index(preferred),
+                                        help="`fine` — калибровка по (HW, engine, precision, attention). "
+                                             "`coarse` — без attention. "
+                                             "`uncalibrated` — literature default.")
+                with c2:
+                    hws = sorted(df_pva["hw"].unique())
+                    hw_filter = st.multiselect("Hardware", hws, default=hws)
+                with c3:
+                    metric = st.radio("Метрика", ["prefill", "decode"], horizontal=True, key="pva_metric")
+                with c4:
+                    plot_type = st.radio("Тип графика", ["Scatter Plot", "Density Heatmap"], horizontal=True,
+                                         index=1,
+                                         help="Scatter Plot показывает отдельные точки (лимит 5k). Density Heatmap строит красивую 2D-гистограмму плотности для всех 9.9k точек без лагов.")
+
+                sub = df_pva[(df_pva["mode"] == mode) & (df_pva["hw"].isin(hw_filter))].copy()
+                if metric == "prefill":
+                    sub = sub[(sub["prefill_obs"] > 0) & (sub["prefill_pred"] > 0)]
+                    sub["obs"] = sub["prefill_obs"]
+                    sub["pred"] = sub["prefill_pred"]
+                    sub["rel_err"] = sub["prefill_rel_err"]
+                    unit = "s"
+                else:
+                    sub = sub[(sub["decode_tps_obs"] > 0) & (sub["decode_tps_pred"] > 0)]
+                    sub["obs"] = sub["decode_tps_obs"]
+                    sub["pred"] = sub["decode_tps_pred"]
+                    sub["rel_err"] = sub["decode_rel_err"]
+                    unit = "tok/s"
+
+                if sub.empty:
+                    st.info("Нет данных под выбранные фильтры.")
+                else:
+                    import numpy as np
+                    if plot_type == "Density Heatmap":
+                        sub["log_obs"] = np.log10(sub["obs"])
+                        sub["log_pred"] = np.log10(sub["pred"])
+                        
+                        heatmap = alt.Chart(sub).mark_rect().encode(
+                            x=alt.X("log_obs:Q", bin=alt.Bin(maxbins=35), title=f"observed ({unit}, log10)"),
+                            y=alt.Y("log_pred:Q", bin=alt.Bin(maxbins=35), title=f"predicted ({unit}, log10)"),
+                            color=alt.Color("count():Q", scale=alt.Scale(scheme="viridis"), title="Точек в бине"),
+                            tooltip=[
+                                alt.Tooltip("count():Q", title="Точек в бине"),
+                            ]
+                        )
+                        
+                        lo = max(min(sub["log_obs"].min(), sub["log_pred"].min()), -4.0)
+                        hi = max(sub["log_obs"].max(), sub["log_pred"].max())
+                        diag = alt.Chart(pd.DataFrame({"x": [lo, hi]})).mark_line(
+                            color="#f58518", strokeDash=[4, 4], strokeWidth=2
+                        ).encode(x="x:Q", y="x:Q")
+                        
+                        st.altair_chart((heatmap + diag).properties(height=440), width="stretch")
+                        st.caption(
+                            f"Показано тепловое распределение всех {len(sub):,} бенчмарк-точек. "
+                            "Оранжевый пунктир — идеальная диагональ."
+                        )
+                    else:
+                        sub_capped = sub.head(5000)
+                        scatter = alt.Chart(sub_capped).mark_circle(size=40, opacity=0.45).encode(
+                            x=alt.X("obs:Q", scale=alt.Scale(type="log"),
+                                    title=f"observed ({unit}, log)"),
+                            y=alt.Y("pred:Q", scale=alt.Scale(type="log"),
+                                    title=f"predicted ({unit}, log)"),
+                            color=alt.Color("hw:N"),
+                            tooltip=["hw", "model", "precision", "attention",
+                                     alt.Tooltip("obs:Q", format=".3g"),
+                                     alt.Tooltip("pred:Q", format=".3g"),
+                                     alt.Tooltip("rel_err:Q", format=".2f")],
+                        )
+                        lo = max(min(sub_capped["obs"].min(), sub_capped["pred"].min()), 1e-4)
+                        hi = max(sub_capped["obs"].max(), sub_capped["pred"].max())
+                        diag = alt.Chart(pd.DataFrame({"x": [lo, hi]})).mark_line(
+                            color="#888", strokeDash=[4, 4]
+                        ).encode(x="x:Q", y="x:Q")
+                        st.altair_chart((scatter + diag).properties(height=440),
+                                        width="stretch")
+                        st.caption(
+                            f"Показано {len(sub_capped):,} из {len(sub):,} точек "
+                            "(жёсткий cap 5k чтобы Altair не тормозил). "
+                            "Диагональ — идеальное предсказание."
+                        )
+
+                    st.markdown("### Медианная ошибка по железу")
+                    agg = sub.groupby("hw")["rel_err"].agg(["median", "count"]).reset_index()
+                    agg.columns = ["hw", "median rel.err", "n"]
+                    st.dataframe(agg, width="stretch", hide_index=True)
