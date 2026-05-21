@@ -57,6 +57,54 @@ HARDWARE_SPECS = {
         "memory_capacity_gb": 80.0,
         "tdp_w": 700,
     },
+    "1xH200": {
+        # NVIDIA H200 SXM 141GB — Hopper refresh (2024). Same Hopper compute
+        # as H100 but HBM3e bumps capacity 80→141 GB and bandwidth 3.35→4.8
+        # TB/s. Drop-in replacement; bigger models fit and memory-bound
+        # decode is ~43% faster than H100 by bandwidth ratio alone.
+        "peak_tflops": {16: 989.0, 8: 1979.0, 4: 1979.0},
+        "memory_bandwidth_gbs": 4800.0,
+        "memory_capacity_gb": 141.0,
+        "tdp_w": 700,
+    },
+    "1xB200": {
+        # NVIDIA B200 SXM 192GB — Blackwell server (2025). Two-die package,
+        # vendor TFLOPS numbers below are the dense, no-sparsity peaks for
+        # the WHOLE package (both dies combined). Sparsity marketing
+        # doubles these — we keep dense for production realism.
+        # FP4 native via 2nd-gen Transformer Engine; dequantize-to-FP16
+        # NOT required for FP4 weights, so 4-bit gets the full 9 PFLOPS.
+        # HBM3e 8 TB/s — ~2.4× over H100, ~1.7× over H200.
+        "peak_tflops": {16: 2250.0, 8: 4500.0, 4: 9000.0},
+        "memory_bandwidth_gbs": 8000.0,
+        "memory_capacity_gb": 192.0,
+        "tdp_w": 1000,
+        "notes": "FP4 native (no dequant). Compute crossover batch shifts "
+                 "from ~64 (A100) / ~92 (H100) toward ~150+ for FP16 paths.",
+    },
+    "1xMI300X": {
+        # AMD Instinct MI300X 192GB — CDNA 3 (2024). Same memory capacity
+        # as B200 but ~60% the bandwidth (5.3 vs 8 TB/s) and ~58% the FP16
+        # compute (1307 vs 2250 TFLOPS). Strong on decode where memory
+        # dominates; weaker on compute-bound prefill. Native FP8.
+        # ROCm 6.x + vLLM-AMD have closed most of the software gap by 2026,
+        # though α typically lands 0.05-0.10 below NVIDIA on the same model.
+        "peak_tflops": {16: 1307.0, 8: 2614.0, 4: 2614.0},
+        "memory_bandwidth_gbs": 5300.0,
+        "memory_capacity_gb": 192.0,
+        "tdp_w": 750,
+        "notes": "ROCm/vLLM-AMD path; α empirically 0.05-0.10 below NVIDIA.",
+    },
+    "1xMI325X": {
+        # AMD Instinct MI325X 256GB — CDNA 3 refresh (2024 Q4). Same compute
+        # as MI300X but HBM3e bumps capacity 192→256 GB and bandwidth
+        # 5.3→6.0 TB/s. Targets fitting Llama-3.1-405B FP8 on a single GPU.
+        "peak_tflops": {16: 1307.0, 8: 2614.0, 4: 2614.0},
+        "memory_bandwidth_gbs": 6000.0,
+        "memory_capacity_gb": 256.0,
+        "tdp_w": 1000,
+        "notes": "MI300X refresh — only HBM differs (capacity and BW).",
+    },
     "1xA10": {
         # NVIDIA A10 — Ampere (workstation)
         "peak_tflops": {16: 125.0, 8: 250.0, 4: 250.0},
