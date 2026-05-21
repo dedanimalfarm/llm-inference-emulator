@@ -6,6 +6,7 @@
 
 - Docker 20+ с плагином `compose` (`docker compose version` → `v2.x`)
 - Свободный порт `8501` на localhost
+- Для CLI без Docker — Python 3.11 / 3.12 / 3.13 (тестируем в CI на всех трёх)
 
 Проверка:
 ```bash

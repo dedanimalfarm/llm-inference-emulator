@@ -1,5 +1,7 @@
 # LLM Inference Emulator
 
+[![tests](https://github.com/dedanimalfarm/llm-inference-emulator/actions/workflows/test.yml/badge.svg)](https://github.com/dedanimalfarm/llm-inference-emulator/actions/workflows/test.yml)
+
 Roofline-формула для prefill / decode latency и throughput LLM-инференса.
 Один вопрос — один ответ за миллисекунды, без аренды GPU.
 
@@ -60,7 +62,7 @@ multi-GPU TP. Полный вывод — [`docs/WALKTHROUGH.md`](docs/WALKTHROU
 | Self-consistency (vLLM AWQ Qwen-7B на 2×5090, b=200) | **−0.9%** |
 | Extrapolation на новое железо (H100 без калибровки) | до −56% |
 
-6 cross-check точек против внешних бенчмарков (Baseten, Qwen, Morphllm) —
+4 cross-check точки против внешних бенчмарков (Baseten, Qwen, llama.cpp/Scout, self) —
 вкладка «🧪 Валидация» или [`docs/BENCHMARK_SOURCES.md §2`](docs/BENCHMARK_SOURCES.md).
 
 ---
