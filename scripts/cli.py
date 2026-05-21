@@ -66,6 +66,30 @@ def main():
                    help="Max KV cache size in tokens. Caps both per-step KV "
                         "read cost and total KV memory. Default: unbounded "
                         "(full attention).")
+    p.add_argument("--speculative", action="store_true",
+                   help="Enable speculative decoding model "
+                        "(Leviathan 2022 + draft/verify roofline).")
+    p.add_argument("--spec-accept", type=float, default=0.7,
+                   help="Per-position acceptance probability p (default 0.7). "
+                        "0.5-0.7 for general drafts, 0.7-0.9 for EAGLE/Medusa, "
+                        "0.85-0.95 for DeepSeek MTP.")
+    p.add_argument("--spec-k", type=int, default=4,
+                   help="Number K of tokens proposed by the draft per cycle "
+                        "(default 4). Use K=1 for MTP-style 1-token speculation.")
+    p.add_argument("--spec-draft-b", type=float, default=None,
+                   help="Draft model size in billions (e.g. 1.0 for Llama-3.2-1B, "
+                        "0.3 for EAGLE head). When set, draft cost is computed "
+                        "from roofline; overrides --spec-overhead.")
+    p.add_argument("--spec-draft-active-b", type=float, default=None,
+                   help="MoE draft: active params per token in billions. "
+                        "Defaults to --spec-draft-b (dense).")
+    p.add_argument("--spec-overhead", type=float, default=0.15,
+                   help="Legacy heuristic: draft cost as a fraction of one "
+                        "target decode step (default 0.15). Used only when "
+                        "--spec-draft-b is not given.")
+    p.add_argument("--spec-verify-scale", type=float, default=0.05,
+                   help="Per-K cost penalty on target verify pass. "
+                        "Default 0.05 from vLLM/EAGLE measurements.")
     args = p.parse_args()
 
     eng = ENGINE_DEFAULTS[args.engine]
@@ -111,6 +135,13 @@ def main():
         n_active_b=args.active,
         head_dim=args.head_dim,
         sliding_window=args.sliding_window,
+        speculative=args.speculative,
+        spec_accept_rate=args.spec_accept,
+        spec_k_proposed=args.spec_k,
+        spec_overhead=args.spec_overhead,
+        spec_draft_n_params_b=args.spec_draft_b,
+        spec_draft_active_b=args.spec_draft_active_b,
+        spec_verify_scale=args.spec_verify_scale,
     )
 
     # MoE: figure out the effective active count for the printout (CLI override > ARCH_DEFAULTS > dense).
@@ -124,6 +155,14 @@ def main():
     print(f"  decode/token     : {res.decode_per_token_s*1000:.2f} ms ({res.bottleneck_decode}-bound)")
     print(f"  total latency    : {res.total_latency_s:.3f} s for {args.p_out} new tokens")
     print(f"  throughput       : {res.throughput_tok_s:.1f} tok/s")
+    if args.speculative:
+        draft_label = (f"draft={args.spec_draft_b}B (physics)"
+                       if args.spec_draft_b is not None
+                       else f"overhead={args.spec_overhead:.2f} (heuristic)")
+        print(f"  speculative      : p={args.spec_accept:.2f}, K={args.spec_k}, "
+              f"{draft_label}, verify_scale={args.spec_verify_scale:.2f}")
+        print(f"    E[accepted]    : {res.spec_e_accept:.3f} tokens / cycle")
+        print(f"    speedup        : {res.spec_speedup:.2f}× vs non-speculative")
     if args.cost_per_hour is not None:
         cost_per_million = args.cost_per_hour * 1e6 / (res.throughput_tok_s * 3600)
         print(f"  cost @ ${args.cost_per_hour:g}/hr : ${cost_per_million:.3f} per million tokens")

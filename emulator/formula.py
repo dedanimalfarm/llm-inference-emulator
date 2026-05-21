@@ -19,6 +19,11 @@ class InferenceResult:
     memory_gb: float
     bottleneck_prefill: str
     bottleneck_decode: str
+    # Set only when speculative=True. e_accept is the expected number of
+    # accepted tokens per cycle (Leviathan 2022). speedup compares
+    # decode-per-token time against the non-speculative baseline.
+    spec_e_accept: Optional[float] = None
+    spec_speedup: Optional[float] = None
 
 
 # Rough heuristic shapes for typical decoder-only architectures.
@@ -107,6 +112,9 @@ def predict(
     spec_accept_rate: float = 0.7,
     spec_k_proposed: int = 4,
     spec_overhead: float = 0.15,
+    spec_draft_n_params_b: Optional[float] = None,
+    spec_draft_active_b: Optional[float] = None,
+    spec_verify_scale: float = 0.05,
     compute_path: int = 16,
     n_active_b: Optional[float] = None,
     head_dim: Optional[int] = None,
@@ -118,9 +126,34 @@ def predict(
     batch_saturation: (batch_max, batch_50pct) for MFU scaling
     kv_packing_eff: efficiency of PagedAttention allocation
     speculative: enable speculative decoding mode
-    spec_accept_rate: ratio of accepted draft tokens
-    spec_k_proposed: tokens proposed by draft model
-    spec_overhead: relative cost of draft model pass
+    spec_accept_rate: per-position probability `p` that a draft token is
+                accepted by the target. Acceptance is SEQUENTIAL — if
+                position i is rejected, positions i+1..K are discarded.
+    spec_k_proposed: number K of tokens proposed by the draft model per cycle.
+                Each cycle produces in expectation
+                    E[accepted] = (1 - p^(K+1)) / (1 - p)   if p < 1
+                                = K + 1                     if p = 1
+                tokens (Leviathan et al. 2022). The +1 accounts for the
+                target's own bonus token produced on rejection or after
+                all draft tokens are accepted.
+    spec_overhead: legacy heuristic for draft cost as a fraction of one
+                target decode step (per cycle, summed over K draft steps).
+                Used only when `spec_draft_n_params_b` is None.
+    spec_draft_n_params_b: physics-based draft cost — when set, draft step
+                time is computed from roofline as
+                    t_draft_step ≈ W_draft / (eff_mbw · beta)
+                and total per-cycle draft cost is `K · t_draft_step`.
+                Overrides `spec_overhead`. Use this when a concrete draft
+                model is named (Llama-3.1-1B drafting for 70B, EAGLE head,
+                DeepSeek MTP module, etc.).
+    spec_draft_active_b: MoE draft — active params per token. Defaults to
+                `spec_draft_n_params_b` (dense). Only meaningful with
+                `spec_draft_n_params_b`.
+    spec_verify_scale: per-K cost penalty on the target verify pass.
+                `t_verify = t_dec · (1 + spec_verify_scale · K)`. Default
+                0.05 reflects vLLM/EAGLE measurements where verifying K+1
+                positions costs ~5% more per extra position (KV reads grow
+                linearly while weights load once).
     compute_path: bits for peak_flops lookup
     n_active_b: for MoE models, active params per token (billions). Defaults
                 to n_params_b (dense). Memory still uses n_params_b (all
@@ -238,15 +271,62 @@ def predict(
     t_dec = t_dec_base + t_kv
 
     # ---- Speculative decoding ----
-    # Each main-model step costs (1 + overhead) extra (the draft pass), but
-    # in expectation produces (accept_rate * k) accepted tokens per step.
+    # Leviathan et al. 2022 "Fast Inference from Transformers via Speculative
+    # Decoding". Per cycle the draft proposes K tokens; the target verifies
+    # them in a single forward pass and produces 1 bonus token. Acceptance
+    # is sequential — if draft token i is rejected, all i+1..K are dropped.
+    # Expected accepted tokens per cycle:
+    #     E[N] = sum_{i=0..K} p^i = (1 - p^(K+1)) / (1 - p)        if p < 1
+    #            K + 1                                              if p = 1
+    # Cycle cost = K · t_draft_step + t_verify, where t_verify carries a
+    # small per-K penalty for the extra query positions.
     if speculative:
-        accepted_per_step = spec_accept_rate * spec_k_proposed
-        if accepted_per_step <= 0:
-            raise ValueError("speculative: spec_accept_rate * spec_k_proposed must be > 0")
-        t_dec_final = t_dec * (1.0 + spec_overhead) / accepted_per_step
+        K = spec_k_proposed
+        p = spec_accept_rate
+        if K < 0:
+            raise ValueError(f"spec_k_proposed must be >= 0, got {K}")
+        if not 0.0 <= p <= 1.0:
+            raise ValueError(f"spec_accept_rate must be in [0, 1], got {p}")
+        if spec_verify_scale < 0:
+            raise ValueError(f"spec_verify_scale must be >= 0, got {spec_verify_scale}")
+
+        if p >= 1.0:
+            e_accept = float(K + 1)
+        else:
+            e_accept = (1.0 - p ** (K + 1)) / (1.0 - p)
+
+        if spec_draft_n_params_b is not None:
+            if spec_draft_n_params_b <= 0 or spec_draft_n_params_b >= n_params_b:
+                raise ValueError(
+                    f"spec_draft_n_params_b must be in (0, {n_params_b}), "
+                    f"got {spec_draft_n_params_b}"
+                )
+            draft_active_b = (spec_draft_active_b
+                              if spec_draft_active_b is not None
+                              else spec_draft_n_params_b)
+            if draft_active_b <= 0 or draft_active_b > spec_draft_n_params_b:
+                raise ValueError(
+                    f"spec_draft_active_b must be in (0, {spec_draft_n_params_b}]"
+                )
+            # Draft step is memory-bound (same shape as target's t_dec_mem),
+            # weight bytes scale with active fraction for MoE drafts.
+            W_draft = spec_draft_n_params_b * 1e9 * bits / 8.0
+            draft_read_fraction = draft_active_b / spec_draft_n_params_b
+            t_draft_step = W_draft * draft_read_fraction / (eff_mbw * beta)
+            t_draft_total = K * t_draft_step
+        else:
+            # Legacy heuristic — `spec_overhead` is total draft cost as a
+            # fraction of one target decode step.
+            t_draft_total = spec_overhead * t_dec
+
+        t_verify = t_dec * (1.0 + spec_verify_scale * K)
+        t_cycle = t_draft_total + t_verify
+        t_dec_final = t_cycle / e_accept
+        spec_speedup = t_dec / t_dec_final
     else:
         t_dec_final = t_dec
+        e_accept = None
+        spec_speedup = None
 
     # ---- Memory budget ----
     # Naive allocators reserve a worst-case KV buffer per request; PagedAttention
@@ -267,4 +347,6 @@ def predict(
         memory_gb=(W + kv_total) / 1e9,
         bottleneck_prefill=b_pre,
         bottleneck_decode=b_dec,
+        spec_e_accept=e_accept,
+        spec_speedup=spec_speedup,
     )

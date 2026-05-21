@@ -150,8 +150,11 @@ def test_prefix_cache_partial_hit_proportional():
 
 
 def test_speculative_decoding_speeds_up_decode():
-    """At accept_rate=0.7, k=4, overhead=0.15 the formula gives
-    (1.15 / 2.8) ≈ 0.41× per-token time → ~2.4× decode speedup."""
+    """At accept_rate=0.7, k=4, overhead=0.15, verify_scale=0.05:
+      E[accepted] = (1 - 0.7^5) / 0.3 ≈ 2.773
+      t_cycle = 0.15·t_dec + 1.2·t_dec = 1.35·t_dec
+      t_per   = 1.35 / 2.773 ≈ 0.487·t_dec   → ~2.05× decode speedup
+    """
     common = dict(
         n_params_b=70, bits=16, p_in=256, p_out=64, batch=1,
         peak_flops=get_peak_compute("1xA100", 16),
@@ -162,21 +165,132 @@ def test_speculative_decoding_speeds_up_decode():
     spec = predict(speculative=True, spec_accept_rate=0.7, spec_k_proposed=4,
                    spec_overhead=0.15, **common)
     assert spec.decode_per_token_s < base.decode_per_token_s * 0.5
-    # Sanity: with accept_rate=0.0 it must NOT speed up — it would divide by zero.
-    # Formula raises in that case; we just ensure it's not silently faster than base.
+    # Result must expose e_accept and speedup
+    assert spec.spec_e_accept is not None
+    assert abs(spec.spec_e_accept - 2.7731) < 1e-3
+    assert spec.spec_speedup is not None
+    assert spec.spec_speedup > 2.0
+    # Non-speculative baseline: fields are None
+    assert base.spec_e_accept is None
+    assert base.spec_speedup is None
 
 
-def test_speculative_zero_accept_rate_raises():
+def test_speculative_truncated_geometric_at_low_acceptance():
+    """At p=0.5, K=8, the OLD product formula (p·K=4) double-counts vs the
+    correct truncated geometric E = (1 - 0.5^9)/0.5 ≈ 1.996. The fix must
+    yield E close to 2 and speedup well below the naive estimate."""
+    common = dict(
+        n_params_b=70, bits=16, p_in=256, p_out=64, batch=1,
+        peak_flops=get_peak_compute("1xA100", 16),
+        mem_bw=get_memory_bandwidth("1xA100"),
+        alpha=0.40, beta=0.85,
+    )
+    spec = predict(speculative=True, spec_accept_rate=0.5, spec_k_proposed=8,
+                   spec_overhead=0.0, spec_verify_scale=0.0, **common)
+    # E[accepted] must match the closed-form formula
+    assert abs(spec.spec_e_accept - 1.99609) < 1e-4
+    # With zero draft cost and zero verify scaling: t_cycle = t_dec
+    # → speedup = E[accepted] ≈ 2.0 (NOT 4.0 from the buggy product)
+    assert abs(spec.spec_speedup - 1.99609) < 1e-3
+
+
+def test_speculative_perfect_acceptance_gives_kplus1_speedup():
+    """At p=1.0 the geometric sum collapses to K+1 (every proposed token
+    accepted plus the bonus). With zero overhead we get exactly (K+1)×
+    speedup — the theoretical maximum."""
+    common = dict(
+        n_params_b=70, bits=16, p_in=256, p_out=64, batch=1,
+        peak_flops=get_peak_compute("1xA100", 16),
+        mem_bw=get_memory_bandwidth("1xA100"),
+        alpha=0.40, beta=0.85,
+    )
+    for K in (0, 1, 4, 8):
+        spec = predict(speculative=True, spec_accept_rate=1.0, spec_k_proposed=K,
+                       spec_overhead=0.0, spec_verify_scale=0.0, **common)
+        assert spec.spec_e_accept == K + 1
+        assert abs(spec.spec_speedup - (K + 1)) < 1e-9
+
+
+def test_speculative_zero_acceptance_is_pure_overhead():
+    """At p=0 the draft is never accepted; only the target's bonus token
+    survives each cycle. Speculative decoding must be SLOWER than baseline:
+      E[accepted] = 1
+      t_cycle = overhead·t_dec + t_dec·(1 + verify_scale·K) > t_dec
+    """
+    common = dict(
+        n_params_b=7, bits=16, p_in=256, p_out=64, batch=1,
+        peak_flops=get_peak_compute("1xA100", 16),
+        mem_bw=get_memory_bandwidth("1xA100"),
+        alpha=0.40, beta=0.85,
+    )
+    base = predict(**common)
+    spec = predict(speculative=True, spec_accept_rate=0.0, spec_k_proposed=4,
+                   spec_overhead=0.15, spec_verify_scale=0.05, **common)
+    assert spec.spec_e_accept == 1.0
+    assert spec.decode_per_token_s > base.decode_per_token_s
+    assert spec.spec_speedup < 1.0
+
+
+def test_speculative_draft_physics_path():
+    """When `spec_draft_n_params_b` is given, draft step cost comes from
+    roofline rather than the `spec_overhead` heuristic. A 1B draft for a
+    70B target should be ~1/70 of the target step (both memory-bound).
+    K=4 cycles → total draft cost ≈ 4/70 ≈ 5.7% of one target decode."""
+    common = dict(
+        n_params_b=70, bits=16, p_in=256, p_out=64, batch=1,
+        peak_flops=get_peak_compute("1xA100", 16),
+        mem_bw=get_memory_bandwidth("1xA100"),
+        alpha=0.40, beta=0.85,
+    )
+    base = predict(**common)
+    # No verify penalty so we can isolate the draft term.
+    spec = predict(speculative=True, spec_accept_rate=0.8, spec_k_proposed=4,
+                   spec_draft_n_params_b=1.0, spec_verify_scale=0.0, **common)
+    # E[accepted] for p=0.8, K=4 = (1 - 0.8^5)/0.2 ≈ 3.3616
+    assert abs(spec.spec_e_accept - 3.3616) < 1e-3
+    # t_cycle / t_dec = 4·(1/70) + 1 ≈ 1.0571
+    # speedup = 3.3616 / 1.0571 ≈ 3.180×
+    assert abs(spec.spec_speedup - 3.180) < 0.02
+    # spec_overhead should be IGNORED when draft is specified — pass an
+    # absurd value and confirm result doesn't change.
+    spec_ignored = predict(speculative=True, spec_accept_rate=0.8, spec_k_proposed=4,
+                           spec_draft_n_params_b=1.0, spec_overhead=999.0,
+                           spec_verify_scale=0.0, **common)
+    assert abs(spec_ignored.decode_per_token_s - spec.decode_per_token_s) < 1e-12
+
+
+def test_speculative_draft_validates_against_target_size():
+    """Draft must be strictly smaller than target — physically impossible
+    to draft with a model larger than the one you're accelerating."""
     common = dict(
         n_params_b=7, bits=16, p_in=256, p_out=64, batch=1,
         peak_flops=get_peak_compute("1xA100", 16),
         mem_bw=get_memory_bandwidth("1xA100"),
     )
     try:
-        predict(speculative=True, spec_accept_rate=0.0, **common)
-    except ValueError:
-        return
-    raise AssertionError("expected ValueError on accept_rate=0")
+        predict(speculative=True, spec_draft_n_params_b=8.0, **common)
+        assert False, "should have raised ValueError"
+    except ValueError as e:
+        assert "spec_draft_n_params_b" in str(e)
+
+
+def test_speculative_eagle_like_published_numbers():
+    """EAGLE-2 paper (Li et al. 2024) reports ~2.5× wall-clock speedup on
+    Llama-2-70B with α≈0.7 effective acceptance and K=4 tree depth.
+    Our model targets this regime with the physics-based draft path."""
+    common = dict(
+        n_params_b=70, bits=16, p_in=1024, p_out=256, batch=1,
+        peak_flops=get_peak_compute("1xA100", 16),
+        mem_bw=get_memory_bandwidth("1xA100"),
+        alpha=0.40, beta=0.85,
+    )
+    # EAGLE head is ~0.3B; treat as 1B for safety margin.
+    spec = predict(speculative=True, spec_accept_rate=0.7, spec_k_proposed=4,
+                   spec_draft_n_params_b=1.0, **common)
+    # Expect 2.0-3.0× — matches published EAGLE-2 numbers
+    assert 2.0 <= spec.spec_speedup <= 3.0, (
+        f"speedup {spec.spec_speedup:.2f}× outside expected 2-3× range"
+    )
 
 
 def test_batch_saturation_asymptote():
@@ -481,7 +595,12 @@ if __name__ == "__main__":
     test_prefix_cache_collapses_prefill_to_weight_load()
     test_prefix_cache_partial_hit_proportional()
     test_speculative_decoding_speeds_up_decode()
-    test_speculative_zero_accept_rate_raises()
+    test_speculative_truncated_geometric_at_low_acceptance()
+    test_speculative_perfect_acceptance_gives_kplus1_speedup()
+    test_speculative_zero_acceptance_is_pure_overhead()
+    test_speculative_draft_physics_path()
+    test_speculative_draft_validates_against_target_size()
+    test_speculative_eagle_like_published_numbers()
     test_batch_saturation_asymptote()
     test_batch_saturation_clipped_by_queue()
     test_kv_packing_eff_inflates_memory_for_naive_allocator()
