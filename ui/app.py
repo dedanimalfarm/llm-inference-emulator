@@ -800,6 +800,16 @@ llama-bench/vLLM прогоны на RTX-3090, A100, RTX-5090).
             else:
                 kv_tok_b = L_layers * H_kv * hd_dim * (kv_k + kv_v) / 8.0
 
+            # Sliding-window-aware total KV bytes — must be computed before
+            # the VRAM breakdown bar and the "Шаг 3" caption both reference
+            # `kv_total`. Same math reused below in edu_tab2 and matches
+            # the t_kv term in formula.py (kv_per_token_bytes * ctx_kept *
+            # batch / kv_packing_eff).
+            ctx_used = p_in + p_out
+            if sliding_window is not None:
+                ctx_used = min(ctx_used, sliding_window)
+            kv_total = kv_tok_b * ctx_used * batch / kv_eff_pct
+
             # 📊 Visual VRAM Allocation Breakdown
             capacity_gb = hw_spec["memory_capacity_gb"]
             w_gb = W / 1e9
@@ -905,7 +915,7 @@ llama-bench/vLLM прогоны на RTX-3090, A100, RTX-5090).
                 )
                 
                 st.markdown("### 3. Производительность и фазы инференса (TFLOPS vs. Memory)")
-                intensity_prefill = (2.0 * N_active * bs_eff * p_in_eff) / W if W > 0 else 1.0
+                intensity_prefill = (2.0 * N_active * bs_eff * p_in) / W if W > 0 else 1.0
                 intensity_decode = (2.0 * N_active * bs_eff) / W if W > 0 else 1.0
                 ridge_point = eff_flops / eff_mbw
                 
@@ -995,11 +1005,11 @@ llama-bench/vLLM прогоны на RTX-3090, A100, RTX-5090).
                 ys = np.minimum(eff_flops, eff_mbw * xs) / 1e12
                 roof_df = pd.DataFrame({"Intensity": xs, "Performance": ys, "Type": "GPU Roofline Ceiling"})
                 
-                prefill_flops = 2.0 * N_active * p_in_eff * bs_eff
-                prefill_tflops = (prefill_flops / t_pre) / 1e12 if t_pre > 0 else 0.0
+                prefill_flops = 2.0 * N_active * p_in * bs_eff
+                prefill_tflops = (prefill_flops / res.prefill_s) / 1e12 if res.prefill_s > 0 else 0.0
                 
                 decode_flops = 2.0 * N_active * bs_eff
-                decode_tflops = (decode_flops / t_dec_base) / 1e12 if t_dec_base > 0 else 0.0
+                decode_tflops = (decode_flops / res.decode_per_token_s) / 1e12 if res.decode_per_token_s > 0 else 0.0
                 
                 pts_df = pd.DataFrame([
                     {"Intensity": intensity_prefill, "Performance": prefill_tflops, "Phase": "⭐ Prefill Phase (Prompt)"},
