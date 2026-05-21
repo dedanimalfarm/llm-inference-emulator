@@ -99,7 +99,6 @@ docker compose down && docker compose up -d --build    # чистый перез
 - Validation: таблицу превратить в карточки с цветовой индикацией Δ
 - Calibration: scatter α/β зажат — переделать в facet по engine
 - Predicted-vs-Actual: 9.9k точек тяжелы для глаза — добавить агрегацию (heatmap/bins), оставить scatter опциональным
-- Общее: нет boot-state «выберите HW/engine/модель → жмите Predict». Сейчас Streamlit пересчитывает при каждом изменении любого input, что путает
 
 ## Тема оформления
 

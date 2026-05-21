@@ -118,6 +118,18 @@ DEFAULTS = {
     "wk_p_in": 256,
     "wk_p_out": 64,
     "wk_batch": 8,
+    # advanced (Эмуляция tab — expander inside form)
+    "adv_kv_k": 16.0,
+    "adv_kv_v": 16.0,
+    "adv_sw": 0,
+    "adv_hd": 128,
+    "adv_cost": 0.0,
+    "adv_oa": False,
+    "adv_alpha": 0.2,
+    "adv_ob": False,
+    "adv_beta": 0.4,
+    # snapshot of all inputs captured on last "Predict" press; None = boot state
+    "pred_snapshot": None,
 }
 for _k, _v in DEFAULTS.items():
     st.session_state.setdefault(_k, _v)
@@ -199,6 +211,36 @@ def current_config() -> dict:
         "bits": int(s["sb_bits"]),
         "active_b": active,
         "precision": s["sb_precision"],
+    }
+
+
+def build_pred_inputs() -> dict:
+    """Snapshot every input that feeds predict() — sidebar + form fields.
+
+    Used both for capturing on Predict press and for staleness detection
+    (compare to pred_snapshot on subsequent reruns).
+    """
+    s = st.session_state
+    cfg = current_config()
+    return {
+        "hw": cfg["hw"],
+        "engine": cfg["engine"],
+        "n_params_b": cfg["n_params_b"],
+        "bits": cfg["bits"],
+        "active_b": cfg["active_b"],
+        "precision": cfg["precision"],
+        "p_in": int(s["wk_p_in"]),
+        "p_out": int(s["wk_p_out"]),
+        "batch": int(s["wk_batch"]),
+        "kv_k": float(s["adv_kv_k"]),
+        "kv_v": float(s["adv_kv_v"]),
+        "sw": int(s["adv_sw"]),
+        "head_dim": int(s["adv_hd"]),
+        "cost_per_hour": float(s["adv_cost"]),
+        "override_alpha": bool(s["adv_oa"]),
+        "alpha_in": float(s["adv_alpha"]),
+        "override_beta": bool(s["adv_ob"]),
+        "beta_in": float(s["adv_beta"]),
     }
 
 
@@ -291,258 +333,293 @@ llama-bench/vLLM прогоны на RTX-3090, A100, RTX-5090).
 # =============================================================================
 with tab_pred:
     cfg = current_config()
-    hw_spec = HARDWARE_SPECS[cfg["hw"]]
-    eng_spec = ENGINE_DEFAULTS[cfg["engine"]]
     arch = _arch_for(cfg["n_params_b"])
 
-    # Top context strip
+    # Top context strip — reflects CURRENT sidebar choice (always live)
     moe_str = ""
     eff_active = cfg["active_b"] if cfg["active_b"] else arch.get("n_active_b", cfg["n_params_b"])
     if eff_active != cfg["n_params_b"]:
         moe_str = f" • MoE: active={eff_active}B"
     st.info(
-        f"**Текущая конфигурация:** "
+        f"**Текущий выбор (sidebar):** "
         f"{cfg['hw']} • {cfg['engine']} • {cfg['n_params_b']}B {cfg['bits']}-bit{moe_str}"
         f" — *поменять можно в сайдбаре слева*"
     )
 
-    # Workload inputs
-    st.subheader("1️⃣ Нагрузка")
-    c1, c2, c3 = st.columns(3)
-    c1.number_input("📥 P_in (prompt tokens)", min_value=1, max_value=131072,
-                    key="wk_p_in", step=128)
-    c2.number_input("📤 P_out (output tokens)", min_value=1, max_value=8192,
-                    key="wk_p_out", step=32)
-    c3.number_input("📦 Batch size", min_value=1, max_value=2048,
-                    key="wk_batch", step=1)
+    # ---- INPUT FORM — gated by Predict button (no auto-rerun) ----
+    with st.form("pred_form", clear_on_submit=False):
+        st.subheader("1️⃣ Нагрузка")
+        c1, c2, c3 = st.columns(3)
+        c1.number_input("📥 P_in (prompt tokens)", min_value=1, max_value=131072,
+                        key="wk_p_in", step=128)
+        c2.number_input("📤 P_out (output tokens)", min_value=1, max_value=8192,
+                        key="wk_p_out", step=32)
+        c3.number_input("📦 Batch size", min_value=1, max_value=2048,
+                        key="wk_batch", step=1)
 
-    p_in = int(st.session_state["wk_p_in"])
-    p_out = int(st.session_state["wk_p_out"])
-    batch = int(st.session_state["wk_batch"])
+        with st.expander("⚙️ Дополнительно — KV bits, sliding window, $/час, ручной α/β"):
+            a1, a2, a3, a4 = st.columns(4)
+            with a1:
+                st.number_input("KV-K bits", step=4.0,
+                                min_value=2.0, max_value=16.0, key="adv_kv_k")
+                st.number_input("KV-V bits", step=4.0,
+                                min_value=2.0, max_value=16.0, key="adv_kv_v")
+            with a2:
+                st.number_input("Sliding window (0 = unbounded)",
+                                min_value=0, max_value=131072, key="adv_sw")
+                st.number_input("head_dim",
+                                min_value=32, max_value=1024,
+                                step=32, key="adv_hd")
+            with a3:
+                st.number_input("Cost $/hour (0 = off)",
+                                min_value=0.0, step=0.5, key="adv_cost")
+            with a4:
+                st.checkbox("Override α", key="adv_oa")
+                st.number_input("α", step=0.05, key="adv_alpha",
+                                disabled=not st.session_state.get("adv_oa", False))
+                st.checkbox("Override β", key="adv_ob")
+                st.number_input("β", step=0.05, key="adv_beta",
+                                disabled=not st.session_state.get("adv_ob", False))
 
-    with st.expander("⚙️ Дополнительно — KV bits, sliding window, $/час, ручной α/β"):
-        a1, a2, a3, a4 = st.columns(4)
-        with a1:
-            kv_k = st.number_input("KV-K bits", value=16.0, step=4.0,
-                                   min_value=2.0, max_value=16.0, key="adv_kv_k")
-            kv_v = st.number_input("KV-V bits", value=16.0, step=4.0,
-                                   min_value=2.0, max_value=16.0, key="adv_kv_v")
-        with a2:
-            sw_default = arch.get("sliding_window") or 0
-            sw_input = st.number_input("Sliding window (0 = unbounded)",
-                                       min_value=0, max_value=131072,
-                                       value=int(sw_default), key="adv_sw")
-            head_dim = st.number_input("head_dim",
-                                       min_value=32, max_value=1024,
-                                       value=int(arch.get("head_dim", 128)),
-                                       step=32, key="adv_hd")
-        with a3:
-            cost_per_hour = st.number_input("Cost $/hour (0 = off)",
-                                            min_value=0.0, value=0.0, step=0.5,
-                                            key="adv_cost")
-        with a4:
-            override_alpha = st.checkbox("Override α", key="adv_oa")
-            alpha_in = st.number_input("α", value=eng_spec["alpha"],
-                                       step=0.05, disabled=not override_alpha,
-                                       key="adv_alpha")
-            override_beta = st.checkbox("Override β", key="adv_ob")
-            beta_in = st.number_input("β", value=eng_spec["beta"],
-                                      step=0.05, disabled=not override_beta,
-                                      key="adv_beta")
-    sliding_window = int(sw_input) if sw_input > 0 else None
+        st.divider()
+        submitted = st.form_submit_button(
+            "▶ Predict", type="primary", width="stretch",
+            help="Снимок текущих параметров (sidebar + форма) → прогон формулы.",
+        )
 
-    # Resolve coefficients
-    alpha, beta = eng_spec["alpha"], eng_spec["beta"]
-    batch_saturation = eng_spec["batch_saturation"]
-    cal = lookup_calibration(cfg["hw"], cfg["engine"], cfg["precision"])
+    # Snapshot all inputs on submit
+    if submitted:
+        st.session_state["pred_snapshot"] = build_pred_inputs()
 
-    badge_text, badge_kind = "🔴 Литературный default движка", "error"
-    if cal:
-        if cal["alpha"] is not None:
-            alpha = cal["alpha"]
-        if cal["beta"] is not None:
-            beta = cal["beta"]
-        if cal["batch_saturation"] is not None:
-            batch_saturation = cal["batch_saturation"]
-        if cal["alpha"] is not None and cal["beta"] is not None:
-            badge_text = f"🟢 Калиброванo на реальных данных (n={cal['n_rows']} замеров)"
-            badge_kind = "success"
+    snap = st.session_state.get("pred_snapshot")
+
+    # Boot state — no prediction yet
+    if snap is None:
+        st.divider()
+        st.info(
+            "👆 **Выбери параметры выше и сайдбар слева, затем нажми ▶ Predict.**\n\n"
+            "Результат появится здесь: prefill / decode / throughput / memory, "
+            "$/M tokens, breakdown по членам формулы, bottleneck-объяснение."
+        )
+    else:
+        # Staleness banner — current inputs differ from last submitted snapshot
+        if build_pred_inputs() != snap:
+            st.warning(
+                "⚠️ Параметры изменились с момента последнего **▶ Predict** — "
+                "текущий результат отражает предыдущий снимок. Нажми **▶ Predict** ещё раз для пересчёта."
+            )
+
+        # All downstream rendering reads from `snap` — never from session_state directly
+        hw_spec = HARDWARE_SPECS[snap["hw"]]
+        eng_spec = ENGINE_DEFAULTS[snap["engine"]]
+        p_in = snap["p_in"]
+        p_out = snap["p_out"]
+        batch = snap["batch"]
+        kv_k = snap["kv_k"]
+        kv_v = snap["kv_v"]
+        sliding_window = int(snap["sw"]) if snap["sw"] > 0 else None
+        head_dim = snap["head_dim"]
+        cost_per_hour = snap["cost_per_hour"]
+        override_alpha = snap["override_alpha"]
+        alpha_in = snap["alpha_in"]
+        override_beta = snap["override_beta"]
+        beta_in = snap["beta_in"]
+
+        # Resolve coefficients
+        alpha, beta = eng_spec["alpha"], eng_spec["beta"]
+        batch_saturation = eng_spec["batch_saturation"]
+        cal = lookup_calibration(snap["hw"], snap["engine"], snap["precision"])
+
+        badge_text, badge_kind = "🔴 Литературный default движка", "error"
+        if cal:
+            if cal["alpha"] is not None:
+                alpha = cal["alpha"]
+            if cal["beta"] is not None:
+                beta = cal["beta"]
+            if cal["batch_saturation"] is not None:
+                batch_saturation = cal["batch_saturation"]
+            if cal["alpha"] is not None and cal["beta"] is not None:
+                badge_text = f"🟢 Калиброванo на реальных данных (n={cal['n_rows']} замеров)"
+                badge_kind = "success"
+            else:
+                badge_text = (f"🟡 Частичная калибровка (n={cal['n_rows']}): "
+                              f"{'α' if cal['alpha'] else ''} "
+                              f"{'β' if cal['beta'] else ''} — остальное literature")
+                badge_kind = "warning"
+        if override_alpha:
+            alpha = alpha_in
+        if override_beta:
+            beta = beta_in
+
+        # ---- Run prediction (using snapshot values) ----
+        compute_bits = eng_spec.get("compute_path", snap["bits"])
+        res = predict(
+            n_params_b=snap["n_params_b"], bits=snap["bits"],
+            p_in=p_in, p_out=p_out, batch=batch,
+            peak_flops=get_peak_compute(snap["hw"], compute_bits),
+            mem_bw=get_memory_bandwidth(snap["hw"]),
+            alpha=alpha, beta=beta,
+            batch_saturation=batch_saturation,
+            kv_packing_eff=eng_spec["kv_packing_eff"],
+            compute_path=compute_bits,
+            kv_bits_k=kv_k, kv_bits_v=kv_v,
+            tp_size=hw_spec.get("tp_size", 1),
+            tp_efficiency=hw_spec.get("tp_efficiency", 1.0),
+            n_active_b=snap["active_b"],
+            head_dim=head_dim,
+            sliding_window=sliding_window,
+        )
+
+        # ---- Results ----
+        st.subheader("2️⃣ Результат")
+
+        # Calibration confidence badge
+        {"success": st.success, "warning": st.warning, "error": st.error}[badge_kind](
+            f"**Точность предсказания:** {badge_text} • "
+            f"α={alpha:.3f}, β={beta:.3f}"
+            + (f", batch_sat={batch_saturation}" if batch_saturation else "")
+        )
+
+        # Big metrics
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("⚡ Prefill", f"{res.prefill_s * 1000:.0f} ms",
+                  help=f"Время на обработку всех {p_in} prompt-токенов "
+                       f"(bottleneck: **{res.bottleneck_prefill}**)")
+        m2.metric("🔄 Decode", f"{res.decode_per_token_s * 1000:.1f} ms/tok",
+                  help=f"Время на генерацию одного токена "
+                       f"(bottleneck: **{res.bottleneck_decode}**)")
+        m3.metric("🚀 Throughput", f"{res.throughput_tok_s:.0f} tok/s",
+                  help=f"Total throughput для batch={batch}")
+        m4.metric("⏱ Total latency", f"{res.total_latency_s:.2f} s",
+                  help=f"Prefill + {p_out}× decode")
+
+        # Memory progress
+        st.markdown("**💾 Память:**")
+        cap = hw_spec["memory_capacity_gb"]
+        used = res.memory_gb
+        pct = min(used / cap, 1.5)
+        if used > cap:
+            st.error(f"⛔ **{used:.1f} GB** требуется — НЕ влезает в {cap:.0f} GB. "
+                     f"Перегрузка: {used / cap:.1f}× capacity. "
+                     "Решения: меньшая модель, более глубокая квантизация (4-bit), "
+                     "tensor-parallel на нескольких GPU, GPU с большей VRAM.")
+        elif used > 0.85 * cap:
+            st.warning(f"⚠️ **{used:.1f} GB** из {cap:.0f} GB ({100 * used / cap:.0f}%) "
+                       "— впритык; для production нужен запас 15-20% на KV-всплески.")
         else:
-            badge_text = (f"🟡 Частичная калибровка (n={cal['n_rows']}): "
-                          f"{'α' if cal['alpha'] else ''} "
-                          f"{'β' if cal['beta'] else ''} — остальное literature")
-            badge_kind = "warning"
-    if override_alpha:
-        alpha = alpha_in
-    if override_beta:
-        beta = beta_in
+            st.success(f"✅ **{used:.1f} GB** из {cap:.0f} GB ({100 * used / cap:.0f}%) — есть запас.")
+        st.progress(min(used / cap, 1.0))
 
-    # ---- Run prediction ----
-    compute_bits = eng_spec.get("compute_path", cfg["bits"])
-    res = predict(
-        n_params_b=cfg["n_params_b"], bits=cfg["bits"],
-        p_in=p_in, p_out=p_out, batch=batch,
-        peak_flops=get_peak_compute(cfg["hw"], compute_bits),
-        mem_bw=get_memory_bandwidth(cfg["hw"]),
-        alpha=alpha, beta=beta,
-        batch_saturation=batch_saturation,
-        kv_packing_eff=eng_spec["kv_packing_eff"],
-        compute_path=compute_bits,
-        kv_bits_k=kv_k, kv_bits_v=kv_v,
-        tp_size=hw_spec.get("tp_size", 1),
-        tp_efficiency=hw_spec.get("tp_efficiency", 1.0),
-        n_active_b=cfg["active_b"],
-        head_dim=head_dim,
-        sliding_window=sliding_window,
-    )
+        # Cost
+        if cost_per_hour > 0:
+            per_million = cost_per_hour * 1e6 / (res.throughput_tok_s * 3600)
+            st.info(f"💰 При **${cost_per_hour:.2f}/час** → "
+                    f"**${per_million:.3f}** за миллион токенов "
+                    f"(throughput {res.throughput_tok_s:.0f} tok/s).")
 
-    # ---- Results ----
-    st.subheader("2️⃣ Результат")
+        # ---- Bottleneck explainer ----
+        st.subheader("3️⃣ Что сейчас bottleneck?")
+        st.caption("Roofline берёт **max(compute, memory)** — выигрывает медленный.")
 
-    # Calibration confidence badge
-    {"success": st.success, "warning": st.warning, "error": st.error}[badge_kind](
-        f"**Точность предсказания:** {badge_text} • "
-        f"α={alpha:.3f}, β={beta:.3f}"
-        + (f", batch_sat={batch_saturation}" if batch_saturation else "")
-    )
+        eff_flops = get_peak_compute(snap["hw"], compute_bits) * \
+                    hw_spec.get("tp_size", 1) * hw_spec.get("tp_efficiency", 1.0)
+        eff_mbw = get_memory_bandwidth(snap["hw"]) * \
+                  hw_spec.get("tp_size", 1) * hw_spec.get("tp_efficiency", 1.0)
+        snap_arch = _arch_for(snap["n_params_b"])
+        snap_eff_active = snap["active_b"] if snap["active_b"] else \
+            snap_arch.get("n_active_b", snap["n_params_b"])
+        N = snap["n_params_b"] * 1e9
+        N_active = snap_eff_active * 1e9
+        W = N * snap["bits"] / 8.0
+        bs_eff = float(batch)
+        if batch_saturation:
+            bm, b50 = batch_saturation
+            hill = bm * batch / (batch + b50)
+            bs_eff = min(float(batch), max(min(1.0, float(batch)), hill))
 
-    # Big metrics
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("⚡ Prefill", f"{res.prefill_s * 1000:.0f} ms",
-              help=f"Время на обработку всех {p_in} prompt-токенов "
-                   f"(bottleneck: **{res.bottleneck_prefill}**)")
-    m2.metric("🔄 Decode", f"{res.decode_per_token_s * 1000:.1f} ms/tok",
-              help=f"Время на генерацию одного токена "
-                   f"(bottleneck: **{res.bottleneck_decode}**)")
-    m3.metric("🚀 Throughput", f"{res.throughput_tok_s:.0f} tok/s",
-              help=f"Total throughput для batch={batch}")
-    m4.metric("⏱ Total latency", f"{res.total_latency_s:.2f} s",
-              help=f"Prefill + {p_out}× decode")
+        t_pre_compute = 2.0 * N_active * p_in * bs_eff / (eff_flops * alpha)
+        t_pre_mem = W / eff_mbw
+        t_dec_mem = W * (N_active / N) / (eff_mbw * beta)
+        t_dec_compute = 2.0 * N_active * bs_eff / (eff_flops * alpha)
 
-    # Memory progress
-    st.markdown("**💾 Память:**")
-    cap = hw_spec["memory_capacity_gb"]
-    used = res.memory_gb
-    pct = min(used / cap, 1.5)
-    if used > cap:
-        st.error(f"⛔ **{used:.1f} GB** требуется — НЕ влезает в {cap:.0f} GB. "
-                 f"Перегрузка: {used / cap:.1f}× capacity. "
-                 "Решения: меньшая модель, более глубокая квантизация (4-bit), "
-                 "tensor-parallel на нескольких GPU, GPU с большей VRAM.")
-    elif used > 0.85 * cap:
-        st.warning(f"⚠️ **{used:.1f} GB** из {cap:.0f} GB ({100 * used / cap:.0f}%) "
-                   "— впритык; для production нужен запас 15-20% на KV-всплески.")
-    else:
-        st.success(f"✅ **{used:.1f} GB** из {cap:.0f} GB ({100 * used / cap:.0f}%) — есть запас.")
-    st.progress(min(used / cap, 1.0))
+        breakdown = pd.DataFrame([
+            {"phase": "Prefill", "term": "compute  2·N_act·P_in·bs / (C·α)",
+             "ms": t_pre_compute * 1000,
+             "winner": res.bottleneck_prefill == "compute"},
+            {"phase": "Prefill", "term": "memory   W / MBW (один проход весов)",
+             "ms": t_pre_mem * 1000,
+             "winner": res.bottleneck_prefill == "memory"},
+            {"phase": "Decode", "term": "memory   W·(N_act/N) / (MBW·β)",
+             "ms": t_dec_mem * 1000,
+             "winner": res.bottleneck_decode == "memory"},
+            {"phase": "Decode", "term": "compute  2·N_act·bs / (C·α)",
+             "ms": t_dec_compute * 1000,
+             "winner": res.bottleneck_decode == "compute"},
+        ])
+        chart = alt.Chart(breakdown).mark_bar().encode(
+            x=alt.X("ms:Q", title="миллисекунды"),
+            y=alt.Y("term:N", sort=None, title=""),
+            color=alt.Color("winner:N",
+                            scale=alt.Scale(domain=[True, False],
+                                            range=["#e45756", "#bbbbbb"]),
+                            legend=alt.Legend(title="bottleneck", labelExpr="datum.label == 'true' ? 'выигрывает (медленнее)' : 'не bottleneck'")),
+            row=alt.Row("phase:N", header=alt.Header(title=None, labelFontSize=14)),
+            tooltip=["phase", "term", alt.Tooltip("ms:Q", format=".3f")],
+        ).properties(height=80)
+        st.altair_chart(chart, width="stretch")
 
-    # Cost
-    if cost_per_hour > 0:
-        per_million = cost_per_hour * 1e6 / (res.throughput_tok_s * 3600)
-        st.info(f"💰 При **${cost_per_hour:.2f}/час** → "
-                f"**${per_million:.3f}** за миллион токенов "
-                f"(throughput {res.throughput_tok_s:.0f} tok/s).")
+        # Plain language interpretation
+        interp_lines = []
+        if res.bottleneck_decode == "memory":
+            interp_lines.append(
+                f"🟦 **Decode упирается в память** — что нормально для LLM. "
+                f"Веса (**{W / 1e9:.1f} GB**) надо прокачать через {eff_mbw / 1e9:.0f} GB/s "
+                f"на каждый сгенерированный токен. Ускорить: квантизация (меньший W), "
+                f"GPU с большей MBW, или прирост batch (амортизация одного weight-pass на больше токенов)."
+            )
+        else:
+            interp_lines.append(
+                f"🟥 **Decode упирается в compute** — необычно. "
+                f"Скорее всего batch={batch} большой и MFU доминирует. "
+                f"Ускорить: меньший batch, более быстрое железо, "
+                f"speculative decoding."
+            )
+        if res.bottleneck_prefill == "compute":
+            interp_lines.append(
+                f"🟧 **Prefill compute-bound** — ожидаемо для длинных промптов "
+                f"(P_in={p_in}). Ускорить: prefix caching (prefix_cache_hit), "
+                f"chunked prefill, более быстрый GPU."
+            )
+        else:
+            interp_lines.append(
+                f"🟦 **Prefill memory-bound** — короткий промпт (P_in={p_in}), "
+                f"compute не успевает использоваться. Это типично при batch=1 "
+                f"и коротких запросах."
+            )
+        if batch_saturation and bs_eff < batch:
+            interp_lines.append(
+                f"⚠️ **Эффективный batch = {bs_eff:.1f}** (запросили {batch}). "
+                f"Hill-кривая континуального батчинга насыщается на bs_max={batch_saturation[0]}. "
+                f"Дальнейший рост batch почти не даст throughput."
+            )
+        for line in interp_lines:
+            st.markdown(line)
 
-    # ---- Bottleneck explainer ----
-    st.subheader("3️⃣ Что сейчас bottleneck?")
-    st.caption("Roofline берёт **max(compute, memory)** — выигрывает медленный.")
-
-    eff_flops = get_peak_compute(cfg["hw"], compute_bits) * \
-                hw_spec.get("tp_size", 1) * hw_spec.get("tp_efficiency", 1.0)
-    eff_mbw = get_memory_bandwidth(cfg["hw"]) * \
-              hw_spec.get("tp_size", 1) * hw_spec.get("tp_efficiency", 1.0)
-    N = cfg["n_params_b"] * 1e9
-    N_active = eff_active * 1e9
-    W = N * cfg["bits"] / 8.0
-    bs_eff = float(batch)
-    if batch_saturation:
-        bm, b50 = batch_saturation
-        hill = bm * batch / (batch + b50)
-        bs_eff = min(float(batch), max(min(1.0, float(batch)), hill))
-
-    t_pre_compute = 2.0 * N_active * p_in * bs_eff / (eff_flops * alpha)
-    t_pre_mem = W / eff_mbw
-    t_dec_mem = W * (N_active / N) / (eff_mbw * beta)
-    t_dec_compute = 2.0 * N_active * bs_eff / (eff_flops * alpha)
-
-    breakdown = pd.DataFrame([
-        {"phase": "Prefill", "term": "compute  2·N_act·P_in·bs / (C·α)",
-         "ms": t_pre_compute * 1000,
-         "winner": res.bottleneck_prefill == "compute"},
-        {"phase": "Prefill", "term": "memory   W / MBW (один проход весов)",
-         "ms": t_pre_mem * 1000,
-         "winner": res.bottleneck_prefill == "memory"},
-        {"phase": "Decode", "term": "memory   W·(N_act/N) / (MBW·β)",
-         "ms": t_dec_mem * 1000,
-         "winner": res.bottleneck_decode == "memory"},
-        {"phase": "Decode", "term": "compute  2·N_act·bs / (C·α)",
-         "ms": t_dec_compute * 1000,
-         "winner": res.bottleneck_decode == "compute"},
-    ])
-    chart = alt.Chart(breakdown).mark_bar().encode(
-        x=alt.X("ms:Q", title="миллисекунды"),
-        y=alt.Y("term:N", sort=None, title=""),
-        color=alt.Color("winner:N",
-                        scale=alt.Scale(domain=[True, False],
-                                        range=["#e45756", "#bbbbbb"]),
-                        legend=alt.Legend(title="bottleneck", labelExpr="datum.label == 'true' ? 'выигрывает (медленнее)' : 'не bottleneck'")),
-        row=alt.Row("phase:N", header=alt.Header(title=None, labelFontSize=14)),
-        tooltip=["phase", "term", alt.Tooltip("ms:Q", format=".3f")],
-    ).properties(height=80)
-    st.altair_chart(chart, width="stretch")
-
-    # Plain language interpretation
-    interp_lines = []
-    if res.bottleneck_decode == "memory":
-        interp_lines.append(
-            f"🟦 **Decode упирается в память** — что нормально для LLM. "
-            f"Веса (**{W / 1e9:.1f} GB**) надо прокачать через {eff_mbw / 1e9:.0f} GB/s "
-            f"на каждый сгенерированный токен. Ускорить: квантизация (меньший W), "
-            f"GPU с большей MBW, или прирост batch (амортизация одного weight-pass на больше токенов)."
-        )
-    else:
-        interp_lines.append(
-            f"🟥 **Decode упирается в compute** — необычно. "
-            f"Скорее всего batch={batch} большой и MFU доминирует. "
-            f"Ускорить: меньший batch, более быстрое железо, "
-            f"speculative decoding."
-        )
-    if res.bottleneck_prefill == "compute":
-        interp_lines.append(
-            f"🟧 **Prefill compute-bound** — ожидаемо для длинных промптов "
-            f"(P_in={p_in}). Ускорить: prefix caching (prefix_cache_hit), "
-            f"chunked prefill, более быстрый GPU."
-        )
-    else:
-        interp_lines.append(
-            f"🟦 **Prefill memory-bound** — короткий промпт (P_in={p_in}), "
-            f"compute не успевает использоваться. Это типично при batch=1 "
-            f"и коротких запросах."
-        )
-    if batch_saturation and bs_eff < batch:
-        interp_lines.append(
-            f"⚠️ **Эффективный batch = {bs_eff:.1f}** (запросили {batch}). "
-            f"Hill-кривая континуального батчинга насыщается на bs_max={batch_saturation[0]}. "
-            f"Дальнейший рост batch почти не даст throughput."
-        )
-    for line in interp_lines:
-        st.markdown(line)
-
-    with st.expander("🔢 Сырые числа (W, C, MBW, batch_eff)"):
-        st.code(
-            f"W (weight bytes)        = {W / 1e9:.3f} GB\n"
-            f"C (peak compute)        = {eff_flops / 1e12:.1f} TFLOPS  "
-            f"@ {compute_bits}-bit\n"
-            f"MBW (memory bandwidth)  = {eff_mbw / 1e9:.0f} GB/s\n"
-            f"batch_requested         = {batch}\n"
-            f"batch_effective         = {bs_eff:.2f}  "
-            + (f"(Hill: max={batch_saturation[0]}, 50%={batch_saturation[1]})"
-               if batch_saturation else "(no saturation)") + "\n"
-            f"alpha (MFU)             = {alpha:.4f}\n"
-            f"beta (MBU)              = {beta:.4f}\n"
-            f"kv_packing_eff          = {eng_spec['kv_packing_eff']}",
-            language="text",
-        )
+        with st.expander("🔢 Сырые числа (W, C, MBW, batch_eff)"):
+            st.code(
+                f"W (weight bytes)        = {W / 1e9:.3f} GB\n"
+                f"C (peak compute)        = {eff_flops / 1e12:.1f} TFLOPS  "
+                f"@ {compute_bits}-bit\n"
+                f"MBW (memory bandwidth)  = {eff_mbw / 1e9:.0f} GB/s\n"
+                f"batch_requested         = {batch}\n"
+                f"batch_effective         = {bs_eff:.2f}  "
+                + (f"(Hill: max={batch_saturation[0]}, 50%={batch_saturation[1]})"
+                   if batch_saturation else "(no saturation)") + "\n"
+                f"alpha (MFU)             = {alpha:.4f}\n"
+                f"beta (MBU)              = {beta:.4f}\n"
+                f"kv_packing_eff          = {eng_spec['kv_packing_eff']}",
+                language="text",
+            )
 
 
 # =============================================================================
