@@ -13,3 +13,4 @@ services:
       - ./ui:/app/ui:ro
       - ./results:/app/results:ro
       - ./docs:/app/docs:ro
+      - ./.streamlit:/app/.streamlit:ro

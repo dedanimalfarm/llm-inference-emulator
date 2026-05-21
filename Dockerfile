@@ -16,6 +16,7 @@ COPY emulator/    ./emulator/
 COPY ui/          ./ui/
 COPY results/     ./results/
 COPY docs/        ./docs/
+COPY .streamlit/  ./.streamlit/
 COPY README.md    ./
 
 EXPOSE 8501

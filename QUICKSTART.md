@@ -100,4 +100,9 @@ docker compose down && docker compose up -d --build    # чистый перез
 - Calibration: scatter α/β зажат — переделать в facet по engine
 - Predicted-vs-Actual: 9.9k точек тяжелы для глаза — добавить агрегацию (heatmap/bins), оставить scatter опциональным
 - Общее: нет boot-state «выберите HW/engine/модель → жмите Predict». Сейчас Streamlit пересчитывает при каждом изменении любого input, что путает
-- Нет тёмной темы / кастомизации `.streamlit/config.toml`
+
+## Тема оформления
+
+Дефолт — тёмная (`.streamlit/config.toml`, `base = "dark"`, accent `#4FC3F7`).
+Переключить на светлую: правый верхний угол → ☰ Settings → Theme → «Light».
+Кастомизировать палитру: правки в `.streamlit/config.toml`, контейнер перерендерит UI без рестарта.
