@@ -785,10 +785,80 @@ llama-bench/vLLM прогоны на RTX-3090, A100, RTX-5090).
             st.divider()
             st.subheader("🎓 Учебный разбор: Физика и математика инференса")
             
-            edu_tab1, edu_tab2, edu_tab3 = st.tabs([
+            # Common parameters for calculations
+            arch_temp = _arch_for(snap["n_params_b"])
+            L_layers = snap.get("layers") if snap.get("layers") is not None else arch_temp.get("layers", 32)
+            H_kv = snap.get("kv_heads") if snap.get("kv_heads") is not None else arch_temp.get("kv_heads", 8)
+            hd_dim = head_dim
+            kv_eff_pct = eng_spec["kv_packing_eff"]
+            is_mla = snap.get("mla_kv_lora_rank") is not None and snap.get("mla_qk_rope_dim") is not None
+            
+            if is_mla:
+                r_lora = snap["mla_kv_lora_rank"]
+                r_rope = snap["mla_qk_rope_dim"]
+                kv_tok_b = L_layers * (r_lora + r_rope) * kv_k / 8.0
+            else:
+                kv_tok_b = L_layers * H_kv * hd_dim * (kv_k + kv_v) / 8.0
+
+            # 📊 Visual VRAM Allocation Breakdown
+            capacity_gb = hw_spec["memory_capacity_gb"]
+            w_gb = W / 1e9
+            kv_gb = kv_total / 1e9
+            # CUDA context & Workspace allocation estimate
+            ov_gb = min(2.0, max(0.5, capacity_gb * 0.05))
+            total_used_gb = w_gb + kv_gb + ov_gb
+            free_gb = max(0.0, capacity_gb - total_used_gb)
+
+            # Convert to percentages for styling
+            w_pct = w_gb / capacity_gb * 100
+            kv_pct = kv_gb / capacity_gb * 100
+            ov_pct = ov_gb / capacity_gb * 100
+            free_pct = free_gb / capacity_gb * 100
+
+            # Normalize percentages if over capacity (to fit 100%)
+            if total_used_gb > capacity_gb:
+                scale_factor = 100.0 / (w_pct + kv_pct + ov_pct)
+                w_pct *= scale_factor
+                kv_pct *= scale_factor
+                ov_pct *= scale_factor
+                free_pct = 0.0
+                bar_border = "2px solid #e74c3c"
+            else:
+                bar_border = "1px solid #ddd"
+
+            st.markdown(f"### 📊 Интерактивная карта распределения памяти VRAM ({capacity_gb:.0f} GB)")
+            st.caption("Цветная шкала показывает, какую долю физической памяти GPU занимают различные компоненты инференса.")
+            
+            # Labels
+            w_label = f"Веса ({w_gb:.1f} GB)" if w_pct > 12 else "Веса" if w_pct > 6 else ""
+            kv_label = f"KV Cache ({kv_gb:.1f} GB)" if kv_pct > 12 else "KV" if kv_pct > 6 else ""
+            ov_label = f"Ов. ({ov_gb:.1f} GB)" if ov_pct > 12 else "Ов." if ov_pct > 6 else ""
+            free_label = f"Свободно ({free_gb:.1f} GB)" if free_pct > 12 else "Своб." if free_pct > 6 else ""
+
+            bar_html = f"""
+            <div style="width: 100%; font-family: sans-serif; margin-bottom: 20px;">
+                <div style="display: flex; width: 100%; height: 32px; border-radius: 8px; overflow: hidden; border: {bar_border}; background-color: #f0f2f6; box-shadow: inset 0 1px 3px rgba(0,0,0,0.12);">
+                    {f'<div style="width: {w_pct}%; background-color: #2ca02c; color: white; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: bold; border-right: 1px solid rgba(255,255,255,0.2);" title="Статические веса модели: {w_gb:.2f} GB">{w_label}</div>' if w_pct > 0 else ""}
+                    {f'<div style="width: {kv_pct}%; background-color: #1f77b4; color: white; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: bold; border-right: 1px solid rgba(255,255,255,0.2);" title="Кэш Key-Value контекстов: {kv_gb:.2f} GB">{kv_label}</div>' if kv_pct > 0 else ""}
+                    {f'<div style="width: {ov_pct}%; background-color: #ff7f0e; color: white; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: bold; border-right: 1px solid rgba(255,255,255,0.2);" title="CUDA Context / Драйверные накладные расходы: {ov_gb:.2f} GB">{ov_label}</div>' if ov_pct > 0 else ""}
+                    {f'<div style="width: {free_pct}%; background-color: #bbbbbb; color: #333333; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: bold;" title="Свободная память VRAM: {free_gb:.2f} GB">{free_label}</div>' if free_pct > 0 else ""}
+                </div>
+                <div style="display: flex; justify-content: space-between; margin-top: 6px; font-size: 12px; color: #555;">
+                    <div>🟢 <b>Веса модели:</b> {w_gb:.2f} GB</div>
+                    <div>🔵 <b>KV Cache:</b> {kv_gb:.2f} GB</div>
+                    <div>🟠 <b>Оверхед CUDA/Движка:</b> {ov_gb:.2f} GB</div>
+                    <div>⚫ <b>Всего занято:</b> {total_used_gb:.2f} / {capacity_gb:.0f} GB</div>
+                </div>
+            </div>
+            """
+            st.markdown(bar_html, unsafe_allow_html=True)
+            
+            # Stepper Tabs
+            edu_tab1, edu_tab2, edu_tab3, edu_tab4 = st.tabs([
                 "🧮 Пошаговый расчет памяти и времени",
                 "📉 Интерактивный Roofline-график",
-                "🔄 Жизненный цикл запроса к LLM"
+                "🔄 Жизненный цикл запроса к LLM",
+                "🧠 Проверь свои знания (Викторина)"
             ])
             
             with edu_tab1:
@@ -804,27 +874,18 @@ llama-bench/vLLM прогоны на RTX-3090, A100, RTX-5090).
                 )
                 
                 st.markdown("### 2. Динамический KV-кэш")
-                arch_temp = _arch_for(snap["n_params_b"])
-                L_layers = snap.get("layers") if snap.get("layers") is not None else arch_temp.get("layers", 32)
-                H_kv = snap.get("kv_heads") if snap.get("kv_heads") is not None else arch_temp.get("kv_heads", 8)
-                hd_dim = head_dim
-                kv_eff_pct = eng_spec["kv_packing_eff"]
-                
                 ctx_total = p_in + p_out
                 sw_cap_str = ""
                 if sliding_window is not None:
                     ctx_total = min(ctx_total, sliding_window)
                     sw_cap_str = f" (ограничено скользящим окном в {sliding_window} токенов)"
                     
-                is_mla = snap.get("mla_kv_lora_rank") is not None and snap.get("mla_qk_rope_dim") is not None
                 if is_mla:
                     r_lora = snap["mla_kv_lora_rank"]
                     r_rope = snap["mla_qk_rope_dim"]
-                    kv_tok_b = L_layers * (r_lora + r_rope) * kv_k / 8.0
                     kv_tok_formula = f"L \\times (r_{{lora}} + r_{{rope}}) \\times \\frac{{b_{{kv}}}}{{8}}"
                     kv_tok_calc = f"{L_layers} \\times ({r_lora} + {r_rope}) \\times \\frac{{{kv_k}}}{{8}} = {kv_tok_b:.0f}\\text{{ байт/токен}}"
                 else:
-                    kv_tok_b = L_layers * H_kv * hd_dim * (kv_k + kv_v) / 8.0
                     kv_tok_formula = f"L \\times H_{{kv}} \\times d_{{head}} \\times \\frac{{b_K + b_V}}{{8}}"
                     kv_tok_calc = f"{L_layers} \\times {H_kv} \\times {hd_dim} \\times \\frac{{{kv_k} + {kv_v}}}{{8}} = {kv_tok_b:.0f}\\text{{ байт/токен}}"
                     
@@ -865,7 +926,63 @@ llama-bench/vLLM прогоны на RTX-3090, A100, RTX-5090).
                     f"- Арифметическая интенсивность: $2 \\times N_{{active}} \\times bs / W \\approx$ **{intensity_decode:.2f} FLOP/byte**.\n"
                     f"- Вердикт: {dec_verdict}. Поскольку декод генерирует по одному токену, интенсивность падает в $P_{{in}}$ раз! Поэтому генерация почти всегда упирается в пропускную способность памяти."
                 )
+
+                st.divider()
+                st.markdown("### 🎛️ Песочница «Что, если?»: Эксперименты со масштабированием")
+                st.caption(
+                    "Поиграйте с ползунками ниже, чтобы мгновенно увидеть перерасчет памяти и арифметической интенсивности "
+                    "в реальном времени. Это безопасная песочница, которая не сбивает ваши основные настройки в сайдбаре."
+                )
+
+                c_wi1, c_wi2, c_wi3 = st.columns(3)
+                with c_wi1:
+                    wi_batch = st.slider("Экспериментальный батч (bs)", 1, 128, int(batch), key="wi_batch_slider")
+                with c_wi2:
+                    wi_pin = st.slider("Длина промпта (P_in)", 32, 8192, int(p_in), step=32, key="wi_pin_slider")
+                with c_wi3:
+                    wi_pout = st.slider("Длина генерации (P_out)", 16, 2048, int(p_out), step=16, key="wi_pout_slider")
+
+                # Recalculate everything for What-If
+                wi_ctx_total = wi_pin + wi_pout
+                if sliding_window is not None:
+                    wi_ctx_total = min(wi_ctx_total, sliding_window)
                 
+                # KV Cache on single token in what-if
+                if is_mla:
+                    wi_kv_tok_b = L_layers * (snap["mla_kv_lora_rank"] + snap["mla_qk_rope_dim"]) * kv_k / 8.0
+                else:
+                    wi_kv_tok_b = L_layers * H_kv * hd_dim * (kv_k + kv_v) / 8.0
+                
+                wi_kv_bytes = wi_kv_tok_b * wi_ctx_total * wi_batch / kv_eff_pct
+                wi_kv_gb = wi_kv_bytes / 1e9
+                wi_total_vram = w_gb + wi_kv_gb + ov_gb
+
+                # Intensities for what-if
+                wi_intensity_prefill = (2.0 * N_active * wi_batch * wi_pin) / W if W > 0 else 1.0
+                wi_intensity_decode = (2.0 * N_active * wi_batch) / W if W > 0 else 1.0
+
+                st.markdown("#### 📊 Мгновенный результат эксперимента:")
+                col_res1, col_res2, col_res3 = st.columns(3)
+                with col_res1:
+                    st.metric("Размер KV-кэша (Что-если)", f"{wi_kv_gb * 1024:.1f} MB", 
+                              delta=f"{(wi_kv_gb - kv_gb) * 1024:+.1f} MB", delta_color="inverse")
+                with col_res2:
+                    st.metric("Арифм. инт. Prefill", f"{wi_intensity_prefill:.1f} FLOP/byte",
+                              delta=f"{wi_intensity_prefill - intensity_prefill:+.1f} FLOP/B")
+                with col_res3:
+                    st.metric("Арифм. инт. Decode", f"{wi_intensity_decode:.2f} FLOP/byte",
+                              delta=f"{wi_intensity_decode - intensity_decode:+.2f} FLOP/B")
+
+                # Show visual math formula with live values for What-If
+                st.latex(rf"""
+                KV_{{\text{{total}}}} \;=\; \frac{{{wi_kv_tok_b:.0f}\text{{ B/tok}} \times {wi_ctx_total}\text{{ ток}} \times {wi_batch}}}{{{kv_eff_pct}}} \;=\; {wi_kv_gb:.3f}\text{{ GB}}
+                """)
+                
+                if wi_total_vram > capacity_gb:
+                    st.error(f"❌ **OOM! При этих параметрах вы выйдете за лимит памяти GPU:** требуется **{wi_total_vram:.1f} GB** при ёмкости **{capacity_gb:.0f} GB**.")
+                else:
+                    st.success(f"✅ **Модель поместится в VRAM:** требуется **{wi_total_vram:.1f} GB** (свободно еще **{capacity_gb - wi_total_vram:.1f} GB**).")
+            
             with edu_tab2:
                 st.markdown("### Визуализация Roofline-модели")
                 st.caption(
@@ -905,8 +1022,35 @@ llama-bench/vLLM прогоны на RTX-3090, A100, RTX-5090).
                 st.altair_chart((line_chart + pts_chart).properties(height=350), width="stretch")
                 st.caption("Если точка лежит на горизонтальном участке зеленой линии — она ограничена Compute (ядрами). Если на наклонном — Memory (памятью).")
                 
+                st.divider()
+                st.markdown("### 📉 Точка перелома (Ridge Point) на разном железе")
+                st.caption(
+                    "Точка перелома рассчитывается как отношение пиковой производительности к пропускной способности памяти: "
+                    "**Ridge Point = Peak TFLOPS / Memory Bandwidth**."
+                )
+
+                ridge_data = [
+                    {"GPU": "RTX 4090 (Desktop)", "TFLOPS (BF16)": 83.0, "Bandwidth (GB/s)": 1008.0, "Ridge Point (FLOP/byte)": 82.3, "Класс": "Потребительский"},
+                    {"GPU": "NVIDIA L4", "TFLOPS (BF16)": 30.0, "Bandwidth (GB/s)": 300.0, "Ridge Point (FLOP/byte)": 100.0, "Класс": "Энергоэффективный"},
+                    {"GPU": "NVIDIA A100 (PCIe)", "TFLOPS (BF16)": 312.0, "Bandwidth (GB/s)": 1935.0, "Ridge Point (FLOP/byte)": 161.2, "Класс": "Серверный (предыдущий)"},
+                    {"GPU": "NVIDIA H100 (SXM5)", "TFLOPS (BF16)": 989.0, "Bandwidth (GB/s)": 3350.0, "Ridge Point (FLOP/byte)": 295.2, "Класс": "Серверный (флагман)"},
+                    {"GPU": "NVIDIA H200 (SXM)", "TFLOPS (BF16)": 989.0, "Bandwidth (GB/s)": 4800.0, "Ridge Point (FLOP/byte)": 206.0, "Класс": "HBM3e (сверхбыстрый)"},
+                ]
+                df_ridge = pd.DataFrame(ridge_data)
+                
+                st.dataframe(df_ridge, width="stretch", hide_index=True)
+                
+                st.info(
+                    f"💡 **Обратите внимание:** Для выбранного вами GPU **{snap['hw']}** Ridge Point равен **{ridge_point:.1f} FLOP/byte**.\n\n"
+                    "**Физический вывод:** Если арифметическая интенсивность вашей операции (см. вкладку 1) меньше этой величины, "
+                    "ядра видеокарты будут простаивать, ожидая данные из памяти. "
+                    "На флагманских чипах (например, H100 SXM5 с Ridge Point 295.2) получить максимальную отдачу намного сложнее, чем на RTX 4090, "
+                    "поэтому серверные архитектуры критически зависят от технологий сжатия памяти (GQA, MLA) и больших батчей."
+                )
+            
             with edu_tab3:
                 st.markdown("### 🔄 Жизненный цикл обработки вашего запроса в GPU:")
+                st.caption("Нажмите на стрелочки ниже, чтобы рассмотреть каждый шаг процесса инференса в деталях.")
                 
                 st.info(
                     "**📥 Шаг 1: Токенизация (Tokenization)**\n\n"
@@ -914,31 +1058,128 @@ llama-bench/vLLM прогоны на RTX-3090, A100, RTX-5090).
                     f"Ваш промпт преобразован в **{p_in} токенов**."
                 )
                 st.markdown("⬇️")
+                
+                prefill_flops_total = 2.0 * N_active * p_in * bs_eff / 1e12
                 st.success(
                     f"**⚡ Шаг 2: Фаза Prefill (Насыщение)**\n\n"
                     f"GPU считывает веса модели и обрабатывает все **{p_in} токенов** промпта параллельно в один проход. "
-                    "Это требует огромных параллельных вычислений на CUDA-ядрах. "
-                    f"Занимает **{res.prefill_s * 1000:.0f} мс** и упирается в **{res.bottleneck_prefill}**."
+                    f"Это требует огромных параллельных вычислений на CUDA-ядрах.\n\n"
+                    f"- 🧮 **Объем вычислений:** {prefill_flops_total:.3f} TFLOPs операций\n"
+                    f"- 🕒 **Время выполнения:** {res.prefill_s * 1000:.0f} мс\n"
+                    f"- 📈 **Арифметическая интенсивность:** {intensity_prefill:.1f} FLOP/byte\n"
+                    f"- 🚨 **Физический предел:** упирается в **{res.bottleneck_prefill.upper()}**."
                 )
                 st.markdown("⬇️")
+                
                 st.info(
                     f"**💾 Шаг 3: Запись в KV-кэш (KV Cache Storage)**\n\n"
                     f"Для каждого из {p_in} токенов промпта вычисляются векторы ключей (Key) и значений (Value). "
-                    f"Они сохраняются во VRAM (динамически выделено **{kv_total / 1e9:.3f} GB**), чтобы избежать квадратичного пересчета внимания на последующих шагах."
+                    "Они сохраняются во VRAM, чтобы избежать квадратичного пересчета внимания на последующих шагах.\n\n"
+                    f"- 📐 **Размер KV на токен:** {kv_tok_b:.0f} байт\n"
+                    f"- 💾 **Всего выделено во VRAM:** {kv_total / 1e6:.1f} MB (для всего батча из {batch} запросов)\n"
+                    f"- 🌐 **Скорость записи:** ограничена пропускной способностью HBM/VRAM ({eff_mbw / 1e9:.0f} GB/s)."
                 )
                 st.markdown("⬇️")
+                
                 st.warning(
                     f"**🔄 Шаг 4: Цикл Decode (Авторегрессия)**\n\n"
                     f"Модель начинает генерировать ответ последовательно, токен за токеном. На генерацию каждого из **{p_out} токенов** ответа "
-                    f"GPU вынужден считывать из памяти VRAM абсолютно **все веса модели ({W / 1e9:.1f} GB)**. "
-                    f"Каждый шаг занимает **{res.decode_per_token_s * 1000:.1f} мс/ток** и упирается в **{res.bottleneck_decode}**."
+                    f"GPU вынужден считывать из памяти VRAM абсолютно все веса модели (**{W / 1e9:.1f} GB**).\n\n"
+                    f"- 🕒 **Время на один токен:** {res.decode_per_token_s * 1000:.1f} мс/токен\n"
+                    f"- 📈 **Арифметическая интенсивность:** {intensity_decode:.2f} FLOP/byte\n"
+                    f"- 🚨 **Физический лимит:** упирается в **{res.bottleneck_decode.upper()}** (низкий батч не позволяет загрузить ядра GPU)."
                 )
                 st.markdown("⬇️")
+                
                 st.success(
                     f"**📤 Шаг 5: Вывод и Детокенизация (Detokenization)**\n\n"
                     f"Сгенерированные токены переводятся обратно в человеческий текст и выводятся пользователю. "
                     f"Всего сгенерировано **{p_out} токенов** со средней скоростью **{res.throughput_tok_s:.0f} токенов/сек**."
                 )
+
+            with edu_tab4:
+                st.markdown("### 🧠 Обучающая мини-викторина")
+                st.caption("Проверьте свои знания о физических ограничениях и архитектуре LLM-инференса.")
+
+                # Question 1
+                st.markdown("---")
+                st.markdown("**Вопрос 1:** Какая фаза инференса в подавляющем большинстве случаев упирается в пропускную способность памяти (Memory-bound) при реальном деплое?")
+                q1 = st.radio(
+                    "Выберите правильный вариант:",
+                    [
+                        "1. Фаза Prefill (обработка входного промпта)",
+                        "2. Фаза Decode (авторегрессионная генерация токенов)",
+                        "3. Обе фазы всегда одинаково Compute-bound"
+                    ],
+                    key="quiz_q1"
+                )
+                if st.button("Проверить Вопрос 1"):
+                    if "2." in q1:
+                        st.success(
+                            "🎉 **Правильно!**\n\n"
+                            "При генерации каждого последующего токена GPU вынужден считывать абсолютно все гигабайты весов модели из VRAM "
+                            "ради выполнения всего пары FLOP вычислений над одним новым токеном. "
+                            "Поэтому Decode почти всегда ограничен пропускной способностью памяти (Memory-bound)."
+                        )
+                    else:
+                        st.error(
+                            "❌ **Неверно.**\n\n"
+                            "Попробуйте еще раз! Подсказка: на фазе Prefill все токены промпта обрабатываются параллельно (что дает высокую арифметическую интенсивность), "
+                            "а на фазе Decode токены генерируются по одному, заставляя GPU бесконечно перечитывать свои веса из памяти."
+                        )
+
+                # Question 2
+                st.markdown("---")
+                st.markdown("**Вопрос 2:** Каким образом технология Grouped-Query Attention (GQA) ускоряет инференс больших моделей?")
+                q2 = st.radio(
+                    "Выберите правильный вариант:",
+                    [
+                        "1. Уменьшает количество параметров в полносвязных слоях (MLP)",
+                        "2. Сжимает размер KV-кэша в памяти, уменьшая требования к пропускной способности VRAM",
+                        "3. Позволяет обрабатывать промпт параллельно на нескольких GPU без сетевых задержек"
+                    ],
+                    key="quiz_q2"
+                )
+                if st.button("Проверить Вопрос 2"):
+                    if "2." in q2:
+                        st.success(
+                            "🎉 **Правильно!**\n\n"
+                            "GQA группирует несколько голов Key и Value, привязывая их к большему числу Query голов. "
+                            "Это снижает объем памяти для хранения KV-кэша (обычно в 4-8 раз) и радикально сокращает трафик данных "
+                            "из VRAM во время фазы Decode."
+                        )
+                    else:
+                        st.error(
+                            "❌ **Неверно.**\n\n"
+                            "Подсказка: GQA влияет не на веса модели (MLP слои не меняются), а на динамические вектора Key и Value, "
+                            "сохраняемые на каждом слое внимания."
+                        )
+
+                # Question 3
+                st.markdown("---")
+                st.markdown("**Вопрос 3:** Если мы увеличиваем Batch Size с 1 до 64 при постоянной длине контекста, как это влияет на арифметическую интенсивность фазы Decode?")
+                q3 = st.radio(
+                    "Выберите правильный вариант:",
+                    [
+                        "1. Арифметическая интенсивность возрастает линейно, так как веса модели переиспользуются для нескольких запросов одновременно",
+                        "2. Арифметическая интенсивность падает, так как возрастают накладные расходы KV-кэша",
+                        "3. Арифметическая интенсивность не меняется"
+                    ],
+                    key="quiz_q3"
+                )
+                if st.button("Проверить Вопрос 3"):
+                    if "1." in q3:
+                        st.success(
+                            "🎉 **Правильно!**\n\n"
+                            "При увеличении батча веса модели считываются из VRAM один раз для всего пакета из 64 запросов. "
+                            "Объем вычислений (FLOPs) возрастает в 64 раза при том же трафике весов. "
+                            "Это резко повышает арифметическую интенсивность, приближая операцию к Compute-bound зоне и повышая MFU GPU!"
+                        )
+                    else:
+                        st.error(
+                            "❌ **Неверно.**\n\n"
+                            "Подсказка: подумайте, считывается ли вес модели из VRAM для каждого запроса отдельно, или один раз для всего батча."
+                        )
             st.divider()
 
         with st.expander("🔢 Сырые числа (W, C, MBW, batch_eff)"):
