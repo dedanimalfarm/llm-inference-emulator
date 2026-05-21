@@ -362,59 +362,91 @@ with tab_pred:
 
     # ---- INPUT FORM — gated by Predict button (no auto-rerun) ----
     with st.form("pred_form", clear_on_submit=False):
-        st.subheader("1️⃣ Нагрузка")
+        st.subheader("1️⃣ Нагрузка (Workload)")
+        st.markdown(
+            "*(Определяет количество обрабатываемых токенов и параллельных запросов. Напрямую влияет на фазы Prefill/Decode и размер KV-кэша)*"
+        )
         c1, c2, c3 = st.columns(3)
-        c1.number_input("📥 P_in (prompt tokens)", min_value=1, max_value=131072,
-                        key="wk_p_in", step=128)
-        c2.number_input("📤 P_out (output tokens)", min_value=1, max_value=8192,
-                        key="wk_p_out", step=32)
-        c3.number_input("📦 Batch size", min_value=1, max_value=2048,
-                        key="wk_batch", step=1)
+        c1.number_input("📥 Размер промпта (P_in, входных токенов)", min_value=1, max_value=131072,
+                        key="wk_p_in", step=128,
+                        help="Длина входящего текста. Фаза Prefill обрабатывает все эти токены одновременно. При этом вычисляется и сохраняется KV-кэш для каждого токена.")
+        c2.number_input("📤 Длина генерации (P_out, выходных токенов)", min_value=1, max_value=8192,
+                        key="wk_p_out", step=32,
+                        help="Количество токенов, которое модель сгенерирует в ответ. Фаза Decode генерирует токены последовательно, один за другим (авторегрессионно).")
+        c3.number_input("📦 Размер батча (Batch size, запросов)", min_value=1, max_value=2048,
+                        key="wk_batch", step=1,
+                        help="Количество параллельно обрабатываемых запросов/пользователей. Увеличение батча повышает загрузку GPU (throughput), но пропорционально увеличивает расход VRAM под KV-кэш.")
 
-        with st.expander("⚙️ Дополнительно — KV bits, MLA, sliding window, $/час, ручной α/β"):
-            a1, a2, a3, a4 = st.columns(4)
-            with a1:
-                st.number_input("KV-K bits", step=4.0,
-                                min_value=2.0, max_value=16.0, key="adv_kv_k")
-                st.number_input("KV-V bits", step=4.0,
-                                min_value=2.0, max_value=16.0, key="adv_kv_v")
-            with a2:
-                st.number_input("Sliding window (0 = unbounded)",
-                                min_value=0, max_value=131072, key="adv_sw")
-                st.number_input("head_dim (GQA)",
-                                min_value=32, max_value=1024,
-                                step=32, key="adv_hd")
-            with a3:
-                st.number_input("Cost $/hour (0 = off)",
-                                min_value=0.0, step=0.5, key="adv_cost")
-                st.number_input("Alpha Saturation b0 (0=off)",
-                                min_value=0.0, step=1.0, key="adv_alpha_sat",
-                                help="Задаёт параметр насыщения MFU батча b0.")
-            with a4:
-                st.checkbox("Override α", key="adv_oa")
-                st.number_input("α", step=0.05, key="adv_alpha",
-                                disabled=not st.session_state.get("adv_oa", False))
-                st.checkbox("Override β", key="adv_ob")
-                st.number_input("β", step=0.05, key="adv_beta",
-                                disabled=not st.session_state.get("adv_ob", False))
-            
-            st.markdown("**Native Multi-Head Latent Attention (MLA) overrides (DeepSeek V3/V4):**")
-            ma1, ma2 = st.columns(2)
-            ma1.number_input("MLA KV Lora Rank (0 = GQA)", min_value=0, max_value=2048, step=64, key="adv_mla_rank",
-                             help="Ранг латентного сжатия KV (DeepSeek-V3 = 512). При 0 используется стандартный GQA.")
-            ma2.number_input("MLA QK RoPE Head Dim (0 = GQA)", min_value=0, max_value=512, step=16, key="adv_mla_rope",
-                             help="Размерность decoupled Key RoPE проекции (DeepSeek-V3 = 64). При 0 используется стандартный GQA.")
+        with st.expander("⚙️ Дополнительные параметры и оптимизации"):
+            adv_tab1, adv_tab2, adv_tab3, adv_tab4 = st.tabs([
+                "💾 Оптимизации KV-Кэша",
+                "🧠 Архитектура & MLA",
+                "🌐 Распределенный инференс (TP/PP)",
+                "📈 Коэффициенты & Экономика"
+            ])
 
-            st.markdown("**Распределенное моделирование коммуникаций (TP/PP) & Сеть:**")
-            net1, net2, net3, net4 = st.columns(4)
-            net1.number_input("Pipeline Parallelism (PP) Size", min_value=1, max_value=64, step=1, key="adv_pp",
-                              help="Количество стадий пайплайна (PP). Распределяет слои последовательно.")
-            net2.selectbox("Интерконнект (Comm Link)", ["Auto", "none", "nvlink", "infinity_fabric", "pcie5", "pcie4", "pcie3", "ethernet"], key="adv_comm_link",
-                           help="Тип сетевого соединения для моделирования задержек TP и PP. 'Auto' выбирает NVLink для серверных GPU, PCIe для десктопных.")
-            net3.number_input("Полоса линка (Link BW, GB/s)", min_value=0.0, step=10.0, key="adv_comm_bw",
-                              help="Перекрывает стандартную пропускную способность профиля (0.0 = по умолчанию для выбранного линка).")
-            net4.number_input("Задержка линка (Link Latency, ms)", min_value=0.0, step=0.001, format="%.4f", key="adv_comm_lat",
-                              help="Перекрывает стандартный пинг сетевого линка (0.0 = по умолчанию для выбранного линка).")
+            with adv_tab1:
+                st.markdown("**Настройки структуры и сжатия стандартного KV-кэша:**")
+                a1, a2 = st.columns(2)
+                with a1:
+                    st.number_input("Квантование Key (KV-K bits)", step=4.0,
+                                    min_value=2.0, max_value=16.0, key="adv_kv_k",
+                                    help="Точность хранения ключей в KV-кэше. Понижение разрядности (например, до 4 бит) значительно экономит видеопамять (VRAM), позволяя обрабатывать длинные контексты или использовать более крупный батч.")
+                    st.number_input("Квантование Value (KV-V bits)", step=4.0,
+                                    min_value=2.0, max_value=16.0, key="adv_kv_v",
+                                    help="Точность хранения значений в KV-кэше. Аналогично снижает требования к видеопамяти при квантовании.")
+                with a2:
+                    st.number_input("Скользящее окно (Sliding Window, 0 = без ограничений)",
+                                    min_value=0, max_value=131072, key="adv_sw",
+                                    help="Ограничивает максимальный размер сохраняемых токенов контекста внимания. Помогает жестко контролировать размер KV-кэша и предотвращает переполнение VRAM на длинных диалогах.")
+                    st.number_input("Размерность головы (head_dim, для GQA)",
+                                    min_value=32, max_value=1024,
+                                    step=32, key="adv_hd",
+                                    help="Размерность проекции одной головы внимания (обычно 128). Влияет на форму и объем тензоров KV-кэша.")
+
+            with adv_tab2:
+                st.markdown("**Сжатие внимания Multi-Head Latent Attention (MLA) — как в DeepSeek V3/V4:**")
+                st.info("💡 MLA сжимает ключи и значения в латентное пространство низкого ранга, снижая требования к памяти на больших батчах в разы. При значении 0 используется стандартный GQA/MHA.")
+                ma1, ma2 = st.columns(2)
+                ma1.number_input("Ранг сжатия KV (MLA KV Lora Rank, 0 = выключено)", min_value=0, max_value=2048, step=64, key="adv_mla_rank",
+                                 help="Ранг латентного сжатия KV (в DeepSeek-V3 = 512).")
+                ma2.number_input("Размерность QK RoPE (MLA QK RoPE Head Dim, 0 = выключено)", min_value=0, max_value=512, step=16, key="adv_mla_rope",
+                                 help="Размерность отдельной Key RoPE проекции для позиционного кодирования (в DeepSeek-V3 = 64).")
+
+            with adv_tab3:
+                st.markdown("**Распределенное моделирование коммуникаций (TP/PP) & Сеть:**")
+                st.info("💡 Разделение слоев (PP) или тензоров (TP) снижает требования к VRAM на одну карту, но вводит сетевые накладные расходы на стыках.")
+                net1, net2 = st.columns(2)
+                with net1:
+                    st.number_input("Размер Pipeline Parallelism (PP) Size", min_value=1, max_value=64, step=1, key="adv_pp",
+                                      help="Количество последовательных стадий конвейера. Модель разбивается на группы слоев, которые выполняются на разных GPU друг за другом. Это порождает задержки конвейера (пузырь PP / 1F1B bubble).")
+                    st.selectbox("Интерконнект (Comm Link)", ["Auto", "none", "nvlink", "infinity_fabric", "pcie5", "pcie4", "pcie3", "ethernet"], key="adv_comm_link",
+                                   help="Тип сетевого соединения для моделирования задержек TP и PP. 'Auto' автоматически выбирает NVLink для серверных GPU и PCIe для десктопных.")
+                with net2:
+                    st.number_input("Полоса линка (Link BW, GB/s, 0 = по умолчанию)", min_value=0.0, step=10.0, key="adv_comm_bw",
+                                      help="Перекрывает стандартную пропускную способность выбранной шины (например, PCIe Gen4 x16 = ~31.5 GB/s).")
+                    st.number_input("Задержка линка (Link Latency, ms, 0 = по умолчанию)", min_value=0.0, step=0.001, format="%.4f", key="adv_comm_lat",
+                                      help="Перекрывает стандартный пинг сетевого линка.")
+
+            with adv_tab4:
+                st.markdown("**Ручные настройки формулы и экономика:**")
+                e1, e2 = st.columns(2)
+                with e1:
+                    st.number_input("Стоимость инстанса ($/час, 0 = выключено)",
+                                    min_value=0.0, step=0.5, key="adv_cost",
+                                    help="Позволяет рассчитать экономическую эффективность эмуляции: стоимость генерации 1 миллиона токенов.")
+                    st.number_input("Насыщение MFU батча b0 (Alpha Saturation b0, 0 = авто)",
+                                    min_value=0.0, step=1.0, key="adv_alpha_sat",
+                                    help="Задаёт параметр насыщения MFU батча b0. Влияет на рост вычислительной эффективности при увеличении батча.")
+                with e2:
+                    st.checkbox("Ручной перенос α", key="adv_oa")
+                    st.number_input("Коэффициент эффективности вычислений (α)", step=0.05, key="adv_alpha",
+                                    disabled=not st.session_state.get("adv_oa", False),
+                                    help="Переопределяет коэффициент вычислений альфа.")
+                    st.checkbox("Ручной перенос β", key="adv_ob")
+                    st.number_input("Коэффициент эффективности памяти (β)", step=0.05, key="adv_beta",
+                                    disabled=not st.session_state.get("adv_ob", False),
+                                    help="Переопределяет коэффициент пропускной способности памяти бета.")
 
         st.divider()
         submitted = st.form_submit_button(
@@ -537,20 +569,33 @@ with tab_pred:
                   help=f"Prefill + {p_out}× decode")
 
         # Memory progress
-        st.markdown("**💾 Память:**")
+        st.markdown("**💾 Распределение VRAM (памяти видеокарты):**")
         cap = hw_spec["memory_capacity_gb"]
         used = res.memory_gb
+        
+        weights_gb = snap["n_params_b"] * snap["bits"] / 8.0
+        kv_gb = max(0.0, used - weights_gb)
+
+        c_mem1, c_mem2, c_mem3 = st.columns(3)
+        c_mem1.metric("📦 Веса модели (Weights)", f"{weights_gb:.1f} GB",
+                      help="Память, занимаемая статическими весами модели в VRAM. Зависит от количества параметров модели (B) и разрядности квантования (bits).")
+        c_mem2.metric("💾 KV-Кэш (Context)", f"{kv_gb:.1f} GB",
+                      help="Динамическая память для хранения истории контекста (ключей и значений). Растет линейно с ростом батча и суммарной длины контекста (P_in + P_out).")
+        c_mem3.metric("📊 Всего требуется VRAM", f"{used:.1f} GB / {cap:.0f} GB",
+                      help="Суммарный объем VRAM, необходимый для запуска. Должен быть меньше физического объема VRAM видеокарты.")
+
         pct = min(used / cap, 1.5)
         if used > cap:
-            st.error(f"⛔ **{used:.1f} GB** требуется — НЕ влезает в {cap:.0f} GB. "
-                     f"Перегрузка: {used / cap:.1f}× capacity. "
-                     "Решения: меньшая модель, более глубокая квантизация (4-bit), "
-                     "tensor-parallel на нескольких GPU, GPU с большей VRAM.")
+            st.error(f"⛔ **ОШИБКА: Превышен лимит VRAM!** Требуется **{used:.1f} GB**, но на видеокарте доступно только {cap:.0f} GB.\n\n"
+                     f"**Решения для оптимизации VRAM:**\n"
+                     f"- ✂️ **Использовать квантование**: Снизьте разрядность весов (с 16 до 4-bit) или KV-кэша.\n"
+                     f"- 📦 **Уменьшить батч**: Снизьте размер батча (Batch size) или длину контекста.\n"
+                     f"- 🌐 **Распределенный инференс**: Разделите модель на несколько карт с помощью Pipeline Parallelism (PP) или Tensor Parallelism (TP).")
         elif used > 0.85 * cap:
-            st.warning(f"⚠️ **{used:.1f} GB** из {cap:.0f} GB ({100 * used / cap:.0f}%) "
-                       "— впритык; для production нужен запас 15-20% на KV-всплески.")
+            st.warning(f"⚠️ **ВНИМАНИЕ: Память загружена почти полностью!** Занято **{used:.1f} GB** из {cap:.0f} GB ({100 * used / cap:.0f}%).\n\n"
+                       f"В реальном инференсе (например, vLLM) необходим запас в 15-20% под накладные расходы CUDA-драйвера и пиковые всплески длинных диалогов.")
         else:
-            st.success(f"✅ **{used:.1f} GB** из {cap:.0f} GB ({100 * used / cap:.0f}%) — есть запас.")
+            st.success(f"✅ **Достаточно памяти!** Занято **{used:.1f} GB** из {cap:.0f} GB ({100 * used / cap:.0f}%). Модель свободно помещается в VRAM.")
         st.progress(min(used / cap, 1.0))
 
         # Cost
@@ -561,8 +606,8 @@ with tab_pred:
                     f"(throughput {res.throughput_tok_s:.0f} tok/s).")
 
         # ---- Bottleneck explainer ----
-        st.subheader("3️⃣ Что сейчас bottleneck?")
-        st.caption("Roofline берёт **max(compute, memory)** — выигрывает медленный.")
+        st.subheader("3️⃣ Разбор узких мест (Bottleneck Explainer)")
+        st.caption("Анализ того, что сдерживает производительность вашей системы. Roofline-модель берёт максимальное время из всех фаз (выигрывает самое медленное звено).")
 
         eff_flops = get_peak_compute(snap["hw"], compute_bits) * \
                     hw_spec.get("tp_size", 1) * hw_spec.get("tp_efficiency", 1.0)
@@ -666,42 +711,56 @@ with tab_pred:
         ).properties(height=80)
         st.altair_chart(chart, width="stretch")
 
-        # Plain language interpretation
-        interp_lines = []
-        if res.bottleneck_decode == "memory":
-            interp_lines.append(
-                f"🟦 **Decode упирается в память** — что нормально для LLM. "
-                f"Веса (**{W / 1e9:.1f} GB**) надо прокачать через {eff_mbw / 1e9:.0f} GB/s "
-                f"на каждый сгенерированный токен. Ускорить: квантизация (меньший W), "
-                f"GPU с большей MBW, или прирост batch (амортизация одного weight-pass на больше токенов)."
-            )
-        else:
-            interp_lines.append(
-                f"🟥 **Decode упирается в compute** — необычно. "
-                f"Скорее всего batch={batch} большой и MFU доминирует. "
-                f"Ускорить: меньший batch, более быстрое железо, "
-                f"speculative decoding."
-            )
-        if res.bottleneck_prefill == "compute":
-            interp_lines.append(
-                f"🟧 **Prefill compute-bound** — ожидаемо для длинных промптов "
-                f"(P_in={p_in}). Ускорить: prefix caching (prefix_cache_hit), "
-                f"chunked prefill, более быстрый GPU."
-            )
-        else:
-            interp_lines.append(
-                f"🟦 **Prefill memory-bound** — короткий промпт (P_in={p_in}), "
-                f"compute не успевает использоваться. Это типично при batch=1 "
-                f"и коротких запросах."
-            )
+        # Visual columns for Prefill and Decode phase bottlenecks
+        col_pre, col_dec = st.columns(2)
+        
+        with col_pre:
+            st.markdown("### 📥 Фаза Prefill (Анализ входящего текста)")
+            if res.bottleneck_prefill == "compute":
+                st.error("🚨 **Ограничение: Вычисления (Compute-bound)**")
+                st.markdown(
+                    "**Что это значит?** Графический чип загружен математическими операциями на 100%. "
+                    "Входящий промпт большой, и CUDA-ядра заняты перемножением матриц.\n\n"
+                    "**Как ускорить:**\n"
+                    "- ⚡ Выберите более мощный GPU с более высоким показателем TFLOPS.\n"
+                    "- 💾 Настройте **Prefix Caching** (кэширование часто повторяющихся промптов), чтобы избежать повторных вычислений."
+                )
+            else:
+                st.warning("🔵 **Ограничение: Пропускная способность памяти (Memory-bound)**")
+                st.markdown(
+                    "**Что это значит?** Математические ядра простаивают, потому что GPU тратит больше времени на чтение весов модели из VRAM, чем на сами вычисления. "
+                    "Это типично для коротких промптов или маленького батча.\n\n"
+                    "**Как ускорить:**\n"
+                    "- 📦 Увеличьте размер батча (Batch size) — это позволит амортизировать время чтения весов на большее число запросов, повышая эффективность ядер."
+                )
+
+        with col_dec:
+            st.markdown("### 🔄 Фаза Decode (Генерация ответа)")
+            if res.bottleneck_decode == "memory":
+                st.warning("🔵 **Ограничение: Пропускная способность памяти (Memory-bound)**")
+                st.markdown(
+                    f"**Что это значит?** Модель генерирует токены по одному. На каждом шаге GPU приходится полностью считывать все веса модели (**{W / 1e9:.1f} GB**) из памяти VRAM. "
+                    f"Это классическое «бутылочное горлышко» для LLM.\n\n"
+                    f"**Как ускорить:**\n"
+                    f"- ✂️ **Примените квантование (4/8-bit)**: Это уменьшит размер весов в VRAM и ускорит их чтение.\n"
+                    f"- 📦 Увеличьте размер батча — это повысит общую пропускную способность (throughput), распределяя одно чтение весов на много параллельных запросов.\n"
+                    f"- 💻 Выберите GPU с большей пропускной способностью памяти (HBM3 вместо GDDR6)."
+                )
+            else:
+                st.error("🚨 **Ограничение: Вычисления (Compute-bound)**")
+                st.markdown(
+                    "**Что это значит?** При декодировании GPU ограничен вычислительной мощностью. Такое случается при очень больших батчах, когда накладные расходы ядер (MFU) становятся доминирующими.\n\n"
+                    "**Как ускорить:**\n"
+                    "- ⚙️ Уменьшите размер батча или примените **Speculative Decoding** (когда легкая модель-черновик генерирует токены вперед, а целевая модель верифицирует их за один compute-шаг)."
+                )
+
+        # Satellite warnings (Saturation, Parallelism communication)
         if batch_saturation and bs_eff < batch:
-            interp_lines.append(
-                f"⚠️ **Эффективный batch = {bs_eff:.1f}** (запросили {batch}). "
-                f"Hill-кривая континуального батчинга насыщается на bs_max={batch_saturation[0]}. "
-                f"Дальнейший рост batch почти не даст throughput."
+            st.info(
+                f"⚠️ **Эффективный батч: {bs_eff:.1f}** (запрошено {batch}).\n\n"
+                f"Кривая насыщения MFU непрерывного батчинга (Continuous Batching) приближается к физическому лимиту "
+                f"движка (`batch_max = {batch_saturation[0]}`). Дальнейшее увеличение батча почти не увеличит общую скорость (throughput)."
             )
-        for line in interp_lines:
-            st.markdown(line)
 
         if (res.tp_comm_prefill_s and res.tp_comm_prefill_s > 0) or (res.pp_comm_prefill_s and res.pp_comm_prefill_s > 0) or (res.pp_bubble_prefill_s and res.pp_bubble_prefill_s > 0):
             link_info = f"{res.comm_link.upper()}"
@@ -714,15 +773,16 @@ with tab_pred:
             
             p2p_note = ""
             if snap.get("tp_size", 1) > 1 and res.comm_link.startswith("pcie"):
-                p2p_note = "\n\n⚠️ **Host-Mediated TP PCIe:** На потребительских видеокартах (RTX 3090/4090/5090) драйвер NVIDIA блокирует прямой P2P DMA через PCIe. Обмен идет транзитом через RAM хоста, что срезает шину в ~2 раза и втрое завышает latency (учтено в расчёте)."
+                p2p_note = "\n\n⚠️ **Host-Mediated TP PCIe:** На потребительских видеокартах (RTX 3090/4090/5090) драйвер NVIDIA блокирует прямой P2P DMA через PCIe. Обмен идет транзитом через оперативную память хоста, что снижает скорость шины в ~2 раза и втрое увеличивает задержки (учтено в расчёте)."
 
             st.warning(
-                f"🌐 **Коммуникационные и распределенные задержки ({link_info}):**\n\n"
+                f"🌐 **Сетевые накладные расходы распределенного выполнения ({link_info}):**\n\n"
+                f"При разбиении модели на {snap.get('tp_size', 1)} GPU (TP) и {snap['pp_size']} конвейеров (PP) возникают следующие задержки:\n"
                 f"- **TP All-Reduce (Ring):** Prefill = {t_tp_comm_prefill * 1000:.2f} ms, Decode = {t_tp_comm_decode * 1000:.3f} ms/token\n"
                 f"- **PP stage-to-stage boundary:** Prefill = {t_pp_comm_prefill * 1000:.2f} ms, Decode = {t_pp_comm_decode * 1000:.3f} ms/token\n"
-                f"- **PP 1F1B scheduling bubble:** Prefill = {t_pp_bubble_prefill * 1000:.2f} ms, Decode = {t_pp_bubble_decode * 1000:.3f} ms/token (простои стадий)\n\n"
+                f"- **PP 1F1B scheduling bubble (простои стадий конвейера):** Prefill = {t_pp_bubble_prefill * 1000:.2f} ms, Decode = {t_pp_bubble_decode * 1000:.3f} ms/token\n\n"
                 "Эти задержки добавлены поверх времени вычислений и памяти в соответствии с топологией Megatron-LM.\n\n"
-                "💡 *Примечание:* Ring All-Reduce смоделирован как неперекрывающийся барьер синхронизации (upper-bound roofline limit). Реальные runtime-движки (vLLM/Megatron) за счет асинхронного pipelining (overlap) сокращают фактическую пенализацию в 2-3 раза."
+                "💡 *Совет:* В реальных движках (vLLM/SGLang) за счет асинхронного перекрытия (overlap) коммуникации и вычислений фактическое замедление может быть в 2-3 раза меньше."
                 f"{p2p_note}"
             )
 
