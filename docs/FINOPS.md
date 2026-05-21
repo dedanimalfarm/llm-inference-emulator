@@ -39,12 +39,65 @@
 | RTX-5090 (Blackwell consumer) | $0.50-0.80/hr | $0.69-0.89/hr | — |
 | A100 80GB | $0.67/hr | $0.79/hr | $4.10/hr (p4d/8) |
 | H100 80GB | $1.80-2.50/hr | $2.01-2.69/hr | $4.40/hr (p5/8) |
-| B200 180GB (Blackwell server) | $2.50-3.50/hr | $4.99/hr ($2.12 spot) | $8/hr+ |
+| H200 141GB | $2.49-3.20/hr | $3.59/hr | $7.20/hr (p5e/8) |
+| B200 192GB (Blackwell server) | $2.50-3.50/hr | $4.99/hr ($2.12 spot) | $8/hr+ |
+| MI300X 192GB (AMD) | $1.99-2.49/hr | $2.49/hr | — (Azure ND-MI300X $5.20/hr) |
+| MI325X 256GB (AMD, Q4'24) | $2.30-2.90/hr | $2.99/hr | — |
 | 8× H100 (full node) | $14-20/hr | $16-22/hr | $35/hr (p5) |
+| 8× B200 (HGX) | $20-28/hr | $29-39/hr | $65/hr+ (p6) |
 
 Заметка: marketplace-провайдеры (Vast.ai, Spheron) дешевле on-demand
 hyperscalers в 3-5×, но без SLA — для production нужны Reserved/Spot
 hybrid (см. §3).
+
+**Где находить актуальные цены:** GPU pricing меняется быстро.
+[runpod.io/pricing](https://www.runpod.io/pricing),
+[vast.ai/console/create](https://vast.ai/console/create),
+[lambdalabs.com/service/gpu-cloud](https://lambdalabs.com/service/gpu-cloud)
+— дашборды обновляются ежедневно. AWS / Azure / GCP — соответствующие
+pricing страницы.
+
+### Hardware crossover 2026 — когда брать что
+
+`HARDWARE_SPECS` теперь содержит H100, H200, B200, MI300X, MI325X.
+Roofline-сравнение для **Llama-3.3-70B AWQ.4bit, P_in=1024, P_out=256,
+batch=1, vLLM defaults (α=0.47, β=0.65):**
+
+| HW | VRAM | TTFT ms | t/tok ms | tok/s | bottleneck |
+|---|---:|---:|---:|---:|---|
+| 1× H100 | 80 GB | 308 | 16.3 | 61.6 | memory |
+| 1× H200 | 141 GB | 308 | 11.3 | 88.2 | memory |
+| 1× B200 | 192 GB | 136 | 6.8 | 147 | memory |
+| 1× MI300X | 192 GB | 233 | 10.3 | 97.4 | memory |
+| 1× MI325X | 256 GB | 233 | 9.1 | 110 | memory |
+
+**$/M tokens (vast.ai низкая цена, single-stream batch=1):**
+
+| HW | $/hr | tok/s | $/M tok |
+|---|---:|---:|---:|
+| 1× H100 | $1.80 | 61.6 | **$8.12** |
+| 1× H200 | $2.49 | 88.2 | $7.85 |
+| 1× B200 | $2.50 | 147 | **$4.72** |
+| 1× MI300X | $1.99 | 97.4 | **$5.68** |
+| 1× MI325X | $2.30 | 110 | $5.81 |
+
+Выводы:
+- **B200 даёт лучший $/tok** на single-stream — компенсирует цену
+  ×2.4 ростом throughput из-за HBM3e bandwidth 8 TB/s.
+- **MI300X — лучший value для memory-bound decode**: 60% от bandwidth
+  B200 за 80% от цены, ROCm-софт по vLLM-AMD в 2026 уже зрелый.
+- **H100** в новой раскладке — самый дорогой $/tok при single-stream.
+  Имеет смысл только при reservations < $1.20/hr или 8× full-node
+  TP-сетапах, где compute-bound prefill (длинные промпты, batch>32)
+  возвращает преимущество.
+- **MI325X** интересен только когда нужно влезть в один GPU (Llama-405B
+  FP8 = 200 GB) — за тот же batch=1 throughput переплата по $/tok.
+
+Это **single-stream** число. При batch=32+ картинка меняется
+кардинально — см. §8.5 (MoE) и §10 ниже про disaggregated prefill.
+
+Воспроизводимо: `python scripts/cli.py --model 70 --bits 4 --hw 1xB200
+--engine vllm --p-in 1024 --p-out 256 --batch 1 --cost-per-hour 2.50`.
 
 ---
 
@@ -427,9 +480,41 @@ Speculative decoding даёт **2-3× ускорение decode** для batch=1
 | $5 × $0.79/hr = $3.95/hr | $1.58/hr |
 | Экономия | **−60%** |
 
-В эмуляторе: `--speculative --spec-accept-rate 0.7 --spec-k-proposed 4`
-(см. `cli.py --help`). Эмулятор моделирует и speedup, и overhead
-draft-модели.
+В эмуляторе: `--speculative --spec-accept 0.7 --spec-k 4 --spec-draft-b 1.0`
+(см. `cli.py --help` или `docs/SPECULATIVE_DECODING.md`). Эмулятор
+моделирует truncated-geometric acceptance (Leviathan 2022), draft-проход
+через roofline по заданному размеру draft-модели и verify-penalty за
+дополнительные позиции.
+
+### 8.8. Chunked prefill: TTFT vs aggregate throughput
+
+vLLM/SGLang **chunked prefill** разбивает prompt на куски размера
+`chunk_size` (vLLM default 512, SGLang 2048) и обрабатывает их в
+отдельных forward-pass'ах, между которыми scheduler может вставить
+decode-токены других запросов.
+
+**FinOps-эффект для single-stream чата (batch=1):**
+- При compute-bound prefill (длинные промпты, modern HW) — **нейтрально**:
+  total FLOPS не меняются.
+- При memory-bound prefill (короткие промпты + большая модель) — **штраф
+  по TTFT**: каждый chunk платит за полный weight-load. Llama-70B FP16
+  на H100, P_in=128, chunk_size=64 → TTFT ×2.0.
+
+**Где это окупается:**
+- **Mixed-workload сервинг** (агентные пайплайны, RAG): чанки нового
+  запроса перемежаются с decode уже активных сессий, общая пропускная
+  способность кластера растёт на 20-40% при том же hardware.
+- **Высокий p99 TTFT при batch ≥ 16:** монолитный prefill длинного
+  запроса блокирует всю очередь decode, chunked prefill спасает SLO.
+
+**Где НЕ окупается:**
+- Single-user batch=1 чат с короткими промптами (chunk-tax напрямую
+  виден пользователю как медленный first token).
+- API без queueing (не masquerade-ный поток) — нет decode для
+  попеременности.
+
+Эмулятор: `--chunked-prefill --chunk-size 512`. Сравнить TTFT с
+монолитной версией, увидеть штраф для своего scenario.
 
 ---
 
