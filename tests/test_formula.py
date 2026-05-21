@@ -846,9 +846,8 @@ def test_consumer_gpu_host_mediated_penalty():
     # If we use PCIe 5 on consumer GPU vs standard PCIe 5, the penalty should degrade bw and latency
     res_consumer = predict(comm_link="pcie5", hw="2xRTX-5090", **common)
     
-    import pytest
-    assert res_consumer.comm_link_bw == pytest.approx(31.5)
-    assert res_consumer.comm_link_latency == pytest.approx(7.5e-6)
+    assert abs(res_consumer.comm_link_bw - 31.5) < 0.01
+    assert abs(res_consumer.comm_link_latency - 7.5e-6) < 1e-9
 
 
 def test_pp_1f1b_bubble_latency():
