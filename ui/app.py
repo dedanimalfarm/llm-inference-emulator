@@ -409,7 +409,7 @@ with tab_pred:
             net1, net2, net3, net4 = st.columns(4)
             net1.number_input("Pipeline Parallelism (PP) Size", min_value=1, max_value=64, step=1, key="adv_pp",
                               help="Количество стадий пайплайна (PP). Распределяет слои последовательно.")
-            net2.selectbox("Интерконнект (Comm Link)", ["Auto", "none", "nvlink", "pcie5", "pcie4", "pcie3", "ethernet"], key="adv_comm_link",
+            net2.selectbox("Интерконнект (Comm Link)", ["Auto", "none", "nvlink", "infinity_fabric", "pcie5", "pcie4", "pcie3", "ethernet"], key="adv_comm_link",
                            help="Тип сетевого соединения для моделирования задержек TP и PP. 'Auto' выбирает NVLink для серверных GPU, PCIe для десктопных.")
             net3.number_input("Полоса линка (Link BW, GB/s)", min_value=0.0, step=10.0, key="adv_comm_bw",
                               help="Перекрывает стандартную пропускную способность профиля (0.0 = по умолчанию для выбранного линка).")
@@ -585,10 +585,19 @@ with tab_pred:
         t_dec_mem = W * (N_active / N) / (eff_mbw * beta)
         t_dec_compute = 2.0 * N_active * bs_eff / (eff_flops * alpha)
 
+        pp_size = snap.get("pp_size", 1)
+        if pp_size > 1:
+            t_pre_compute /= pp_size
+            t_pre_mem /= pp_size
+            t_dec_mem /= pp_size
+            t_dec_compute /= pp_size
+
         t_tp_comm_prefill = res.tp_comm_prefill_s or 0.0
         t_pp_comm_prefill = res.pp_comm_prefill_s or 0.0
+        t_pp_bubble_prefill = res.pp_bubble_prefill_s or 0.0
         t_tp_comm_decode = res.tp_comm_decode_s or 0.0
         t_pp_comm_decode = res.pp_comm_decode_s or 0.0
+        t_pp_bubble_decode = res.pp_bubble_decode_s or 0.0
 
         breakdown_rows = [
             {"phase": "Prefill", "term": "compute  2·N_act·P_in·bs / (C·α)",
@@ -610,6 +619,12 @@ with tab_pred:
                 "ms": t_pp_comm_prefill * 1000,
                 "winner": True
             })
+        if t_pp_bubble_prefill > 0:
+            breakdown_rows.append({
+                "phase": "Prefill", "term": "PP 1F1B scheduling bubble overhead",
+                "ms": t_pp_bubble_prefill * 1000,
+                "winner": True
+            })
 
         breakdown_rows.extend([
             {"phase": "Decode", "term": "memory   W·(N_act/N) / (MBW·β)",
@@ -629,6 +644,12 @@ with tab_pred:
             breakdown_rows.append({
                 "phase": "Decode", "term": "PP boundary transfer overhead",
                 "ms": t_pp_comm_decode * 1000,
+                "winner": True
+            })
+        if t_pp_bubble_decode > 0:
+            breakdown_rows.append({
+                "phase": "Decode", "term": "PP 1F1B scheduling bubble overhead",
+                "ms": t_pp_bubble_decode * 1000,
                 "winner": True
             })
 
@@ -682,7 +703,7 @@ with tab_pred:
         for line in interp_lines:
             st.markdown(line)
 
-        if (res.tp_comm_prefill_s and res.tp_comm_prefill_s > 0) or (res.pp_comm_prefill_s and res.pp_comm_prefill_s > 0):
+        if (res.tp_comm_prefill_s and res.tp_comm_prefill_s > 0) or (res.pp_comm_prefill_s and res.pp_comm_prefill_s > 0) or (res.pp_bubble_prefill_s and res.pp_bubble_prefill_s > 0):
             link_info = f"{res.comm_link.upper()}"
             if res.comm_link_bw is not None:
                 link_info += f" ({res.comm_link_bw:.1f} GB/s"
@@ -691,11 +712,18 @@ with tab_pred:
             else:
                 link_info += ")"
             
+            p2p_note = ""
+            if snap.get("tp_size", 1) > 1 and res.comm_link.startswith("pcie"):
+                p2p_note = "\n\n⚠️ **Host-Mediated TP PCIe:** На потребительских видеокартах (RTX 3090/4090/5090) драйвер NVIDIA блокирует прямой P2P DMA через PCIe. Обмен идет транзитом через RAM хоста, что срезает шину в ~2 раза и втрое завышает latency (учтено в расчёте)."
+
             st.warning(
-                f"🌐 **Коммуникационные задержки ({link_info}):**\n\n"
+                f"🌐 **Коммуникационные и распределенные задержки ({link_info}):**\n\n"
                 f"- **TP All-Reduce (Ring):** Prefill = {t_tp_comm_prefill * 1000:.2f} ms, Decode = {t_tp_comm_decode * 1000:.3f} ms/token\n"
-                f"- **PP stage-to-stage boundary:** Prefill = {t_pp_comm_prefill * 1000:.2f} ms, Decode = {t_pp_comm_decode * 1000:.3f} ms/token\n\n"
-                "Эти сетевые задержки добавлены поверх времени вычислений и памяти в соответствии с топологией Megatron-LM."
+                f"- **PP stage-to-stage boundary:** Prefill = {t_pp_comm_prefill * 1000:.2f} ms, Decode = {t_pp_comm_decode * 1000:.3f} ms/token\n"
+                f"- **PP 1F1B scheduling bubble:** Prefill = {t_pp_bubble_prefill * 1000:.2f} ms, Decode = {t_pp_bubble_decode * 1000:.3f} ms/token (простои стадий)\n\n"
+                "Эти задержки добавлены поверх времени вычислений и памяти в соответствии с топологией Megatron-LM.\n\n"
+                "💡 *Примечание:* Ring All-Reduce смоделирован как неперекрывающийся барьер синхронизации (upper-bound roofline limit). Реальные runtime-движки (vLLM/Megatron) за счет асинхронного pipelining (overlap) сокращают фактическую пенализацию в 2-3 раза."
+                f"{p2p_note}"
             )
 
         with st.expander("🔢 Сырые числа (W, C, MBW, batch_eff)"):
@@ -716,6 +744,8 @@ with tab_pred:
                     f"tp_comm_decode_ms       = {t_tp_comm_decode * 1000:.3f} ms\n"
                     f"pp_comm_prefill_ms      = {t_pp_comm_prefill * 1000:.3f} ms\n"
                     f"pp_comm_decode_ms       = {t_pp_comm_decode * 1000:.3f} ms\n"
+                    f"pp_bubble_prefill_ms    = {t_pp_bubble_prefill * 1000:.3f} ms\n"
+                    f"pp_bubble_decode_ms     = {t_pp_bubble_decode * 1000:.3f} ms\n"
                 )
 
             st.code(

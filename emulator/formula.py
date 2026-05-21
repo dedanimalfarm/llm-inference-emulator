@@ -34,21 +34,26 @@ class InferenceResult:
     tp_comm_decode_s: Optional[float] = None
     pp_comm_prefill_s: Optional[float] = None
     pp_comm_decode_s: Optional[float] = None
+    pp_bubble_prefill_s: Optional[float] = None
+    pp_bubble_decode_s: Optional[float] = None
 
 
 INTERCONNECT_PROFILES = {
-    "nvlink":   {"bw_gbs": 450.0, "latency_s": 1.5e-6, "desc": "NVLink (SXM)"},
-    "pcie5":    {"bw_gbs": 63.0,  "latency_s": 2.5e-6, "desc": "PCIe Gen 5 x16"},
-    "pcie4":    {"bw_gbs": 31.5,  "latency_s": 3.0e-6, "desc": "PCIe Gen 4 x16"},
-    "pcie3":    {"bw_gbs": 15.8,  "latency_s": 4.0e-6, "desc": "PCIe Gen 3 x16"},
-    "ethernet": {"bw_gbs": 12.5,  "latency_s": 50.0e-6, "desc": "100 Gbps Ethernet"},
+    "nvlink":           {"bw_gbs": 900.0, "latency_s": 1.5e-6, "desc": "NVLink (SXM)"},
+    "infinity_fabric":  {"bw_gbs": 896.0, "latency_s": 1.0e-6, "desc": "Infinity Fabric (AMD)"},
+    "pcie5":            {"bw_gbs": 63.0,  "latency_s": 2.5e-6, "desc": "PCIe Gen 5 x16"},
+    "pcie4":            {"bw_gbs": 31.5,  "latency_s": 3.0e-6, "desc": "PCIe Gen 4 x16"},
+    "pcie3":            {"bw_gbs": 15.8,  "latency_s": 4.0e-6, "desc": "PCIe Gen 3 x16"},
+    "ethernet":         {"bw_gbs": 12.5,  "latency_s": 50.0e-6, "desc": "100 Gbps Ethernet"},
 }
 
 
 def _infer_comm_link(hw: str) -> str:
     # server-class SXM GPUs default to NVLink
-    if any(x in hw for x in ["A100", "H100", "H200", "B200", "MI300X", "MI325X"]):
+    if any(x in hw for x in ["A100", "H100", "H200", "B200"]):
         return "nvlink"
+    elif any(x in hw for x in ["MI300X", "MI325X"]):
+        return "infinity_fabric"
     # modern high-end consumer GPUs default to PCIe Gen 5
     elif "5090" in hw:
         return "pcie5"
@@ -334,7 +339,7 @@ def predict(
     # cross the HBM boundary. Dense models have N_active==N → factor 1.
     # Note: prefill is treated separately above; with P_in tokens routing
     # is likely to touch every expert, so t_pre_mem keeps using full W.
-    weight_read_fraction = N_active / N
+    weight_read_fraction = (N_active / N) if N > 0 else 1.0
     t_dec_mem     = W * weight_read_fraction / (eff_mbw * beta)
     t_dec_compute = 2.0 * N_active * bs_eff / (eff_flops * alpha_eff)
     if t_dec_mem >= t_dec_compute:
@@ -372,6 +377,8 @@ def predict(
     tp_comm_decode = 0.0
     pp_comm_prefill = 0.0
     pp_comm_decode = 0.0
+    pp_bubble_prefill = 0.0
+    pp_bubble_decode = 0.0
     resolved_link = None
     link_bw = None
     link_latency = None
@@ -392,11 +399,21 @@ def predict(
         link_bw = comm_link_bw if comm_link_bw is not None else profile["bw_gbs"]
         link_latency = comm_link_latency if comm_link_latency is not None else profile["latency_s"]
 
+        # Check for host-mediated PCIe TP penalty on consumer GPUs (e.g. RTX-4090/5090)
+        # where P2P direct transfers are driver-disabled, forcing CPU host transit.
+        if tp_size > 1 and resolved_link.startswith("pcie"):
+            # Typical host-mediated bandwidth is cut by ~50%, and latency is tripled
+            link_bw = link_bw * 0.5
+            link_latency = link_latency * 3.0
+
         # convert link_bw from GB/s to bytes/s
         link_bw_bytes = link_bw * 1e9
 
         if tp_size > 1:
             # Ring All-Reduce modeling: 2 All-Reduces per transformer layer
+            # Note: This models the communication as pure additive overhead (upper-bound roofline limit)
+            # without overlap with compute. In production frameworks like Megatron-LM or vLLM,
+            # async overlap of communication and compute can reduce the actual penalty by 2-3x.
             # Ring All-Reduce sends and receives 2 * ((tp_size - 1)/tp_size) * volume
             # Activation volume per token: d_model * 2.0 (FP16/BF16 activations)
             # Megatron-LM All-Reduce happens twice per layer (Attention projection output & MLP Down projection output)
@@ -416,9 +433,29 @@ def predict(
             pp_comm_prefill = (pp_size - 1) * (link_latency + (t_pre_tokens * d_model * 2.0) / link_bw_bytes)
             pp_comm_decode = (pp_size - 1) * (link_latency + (bs_eff * d_model * 2.0) / link_bw_bytes)
 
-    # Add communication times to baseline latency values
-    t_pre_final = t_pre + tp_comm_prefill + pp_comm_prefill
-    t_dec = t_dec + tp_comm_decode + pp_comm_decode
+    # PP 1F1B Bubble modeling (bubble cost from 1F1B scheduling)
+    # When pp_size > 1, the model layers are divided across stages.
+    # Each stage only processes 1 / pp_size of the total layers.
+    # Therefore, stage prefill/decode latencies are 1 / pp_size of the full sequential times.
+    if pp_size > 1:
+        t_pre_stage = t_pre / pp_size
+        t_dec_stage = t_dec / pp_size
+
+        # Prefill bubble (sequential startup/winddown for 1 micro-batch/request stream):
+        # t_bubble = (pp_size - 1) * t_pre_stage
+        pp_bubble_prefill = (pp_size - 1) * t_pre_stage
+
+        # Decode bubble (1F1B pipeline with bs_eff requests in flight):
+        # t_bubble = ((pp_size - 1) / bs_eff) * t_dec_stage
+        pp_bubble_decode = ((pp_size - 1) / bs_eff) * t_dec_stage
+
+        # Scale down base execution times to reflect single stage execution
+        t_pre = t_pre_stage
+        t_dec = t_dec_stage
+
+    # Add communication and bubble times to baseline latency values
+    t_pre_final = t_pre + tp_comm_prefill + pp_comm_prefill + pp_bubble_prefill
+    t_dec = t_dec + tp_comm_decode + pp_comm_decode + pp_bubble_decode
 
     # ---- Speculative decoding ----
     # Leviathan et al. 2022 "Fast Inference from Transformers via Speculative
@@ -509,4 +546,6 @@ def predict(
         tp_comm_decode_s=tp_comm_decode,
         pp_comm_prefill_s=pp_comm_prefill,
         pp_comm_decode_s=pp_comm_decode,
+        pp_bubble_prefill_s=pp_bubble_prefill,
+        pp_bubble_decode_s=pp_bubble_decode,
     )

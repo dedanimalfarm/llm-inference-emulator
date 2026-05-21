@@ -1,4 +1,4 @@
 mode,prefill_med,decode_med,n
-coarse,0.47,0.484,2445
-fine,0.476,0.437,2433
-uncalibrated,0.631,1.985,2445
+coarse,0.559,0.716,3301
+fine,0.56,0.701,3271
+uncalibrated,0.79,5.235,3301

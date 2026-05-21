@@ -744,7 +744,8 @@ def test_interconnect_inference():
     assert _infer_comm_link("1xH100") == "nvlink"
     assert _infer_comm_link("2xRTX-5090") == "pcie5"
     assert _infer_comm_link("1xRTX-4090") == "pcie4"
-    assert _infer_comm_link("8xMI300X") == "nvlink"
+    assert _infer_comm_link("8xMI300X") == "infinity_fabric"
+    assert _infer_comm_link("8xMI325X") == "infinity_fabric"
 
 
 def test_tp_allreduce_overhead_scaling():
@@ -831,6 +832,46 @@ def test_comm_overrides():
     assert slow_lat.tp_comm_prefill_s > ref.tp_comm_prefill_s
 
 
+def test_consumer_gpu_host_mediated_penalty():
+    """Verify that using TP over PCIe on consumer GPUs triggers a host-mediated penalty."""
+    common = dict(
+        n_params_b=7.0, bits=16, p_in=256, p_out=64, batch=1,
+        peak_flops=get_peak_compute("RTX-3090", 16),
+        mem_bw=get_memory_bandwidth("RTX-3090"),
+        alpha=0.30, beta=0.70,
+        layers=32, d_model=4096, kv_heads=8,
+        tp_size=2,
+    )
+    
+    # If we use PCIe 5 on consumer GPU vs standard PCIe 5, the penalty should degrade bw and latency
+    res_consumer = predict(comm_link="pcie5", hw="2xRTX-5090", **common)
+    
+    import pytest
+    assert res_consumer.comm_link_bw == pytest.approx(31.5)
+    assert res_consumer.comm_link_latency == pytest.approx(7.5e-6)
+
+
+def test_pp_1f1b_bubble_latency():
+    """Verify that PP size > 1 accurately calculates 1F1B bubble times and divides base layers."""
+    common = dict(
+        n_params_b=70.0, bits=16, p_in=256, p_out=64, batch=4,
+        peak_flops=get_peak_compute("1xA100", 16),
+        mem_bw=get_memory_bandwidth("1xA100"),
+        alpha=0.30, beta=0.70,
+        layers=80, d_model=8192, kv_heads=8,
+    )
+    
+    # PP=1
+    pp1 = predict(pp_size=1, **common)
+    assert pp1.pp_bubble_prefill_s == 0.0 or pp1.pp_bubble_prefill_s is None
+    assert pp1.pp_bubble_decode_s == 0.0 or pp1.pp_bubble_decode_s is None
+    
+    # PP=4
+    pp4 = predict(pp_size=4, **common)
+    assert pp4.pp_bubble_prefill_s > 0.0
+    assert pp4.pp_bubble_decode_s > 0.0
+
+
 if __name__ == "__main__":
     test_a100_7b_fp16_decode_is_memory_bound()
     test_quantization_reduces_memory_time()
@@ -877,4 +918,6 @@ if __name__ == "__main__":
     test_tp_allreduce_overhead_scaling()
     test_pp_communication_overhead()
     test_comm_overrides()
+    test_consumer_gpu_host_mediated_penalty()
+    test_pp_1f1b_bubble_latency()
     print("all tests passed")
