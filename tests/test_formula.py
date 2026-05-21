@@ -563,6 +563,109 @@ def test_deepseek_v4_pro_inherits_sliding_window_from_arch():
     assert (full_attn.memory_gb - from_arch.memory_gb) > 5
 
 
+def test_chunked_prefill_neutral_when_compute_bound():
+    """Long compute-bound prefill: chunking changes nothing.
+    Total FLOPS unchanged, and per-chunk compute >> per-chunk memory."""
+    common = dict(
+        n_params_b=70, bits=16, p_in=8192, p_out=64, batch=1,
+        peak_flops=get_peak_compute("1xH100", 16),
+        mem_bw=get_memory_bandwidth("1xH100"),
+        alpha=0.47, beta=0.65,
+    )
+    mono = predict(**common)
+    chunked = predict(chunked_prefill=True, chunk_size=2048, **common)
+    assert mono.bottleneck_prefill == "compute"
+    assert chunked.bottleneck_prefill == "compute"
+    assert abs(chunked.prefill_s - mono.prefill_s) / mono.prefill_s < 1e-6
+
+
+def test_chunked_prefill_overhead_when_memory_bound():
+    """Short prefill on a big model: each chunk pays a full weight-load.
+    With p_in_eff < chunk_size, n_chunks = 1 (still 1 forward pass). With
+    p_in much smaller than what compute-balances W/MBW, multiple small
+    chunks each cost W/MBW → linear overhead in n_chunks."""
+    common = dict(
+        n_params_b=70, bits=16, p_in=128, p_out=64, batch=1,
+        peak_flops=get_peak_compute("1xH100", 16),
+        mem_bw=get_memory_bandwidth("1xH100"),
+        alpha=0.47, beta=0.65,
+    )
+    mono = predict(**common)
+    chunked = predict(chunked_prefill=True, chunk_size=64, **common)
+    assert mono.bottleneck_prefill == "memory"
+    assert chunked.bottleneck_prefill == "memory"
+    # p_in=128, chunk_size=64 → 2 chunks, each W/MBW → 2× overhead
+    assert abs(chunked.prefill_s / mono.prefill_s - 2.0) < 1e-6
+
+
+def test_chunked_prefill_smaller_than_chunk_is_noop():
+    """When p_in_eff < chunk_size, only one chunk is emitted; the result
+    must match the monolithic path exactly."""
+    common = dict(
+        n_params_b=7, bits=16, p_in=256, p_out=64, batch=1,
+        peak_flops=get_peak_compute("1xA100", 16),
+        mem_bw=get_memory_bandwidth("1xA100"),
+        alpha=0.40, beta=0.85,
+    )
+    mono = predict(**common)
+    chunked = predict(chunked_prefill=True, chunk_size=4096, **common)
+    assert abs(chunked.prefill_s - mono.prefill_s) < 1e-12
+
+
+def test_chunked_prefill_validates_chunk_size():
+    common = dict(
+        n_params_b=7, bits=16, p_in=512, p_out=64, batch=1,
+        peak_flops=get_peak_compute("1xA100", 16),
+        mem_bw=get_memory_bandwidth("1xA100"),
+        alpha=0.40, beta=0.85,
+    )
+    try:
+        predict(chunked_prefill=True, chunk_size=0, **common)
+        assert False, "should have raised ValueError"
+    except ValueError as e:
+        assert "chunk_size" in str(e)
+
+
+def test_b200_blackwell_specs_load():
+    """B200 must expose 2.25 PF BF16 dense, 4.5 PF FP8, 9 PF FP4, 8 TB/s."""
+    from emulator.hardware import HARDWARE_SPECS
+    spec = HARDWARE_SPECS["1xB200"]
+    assert spec["peak_tflops"][16] == 2250.0
+    assert spec["peak_tflops"][8] == 4500.0
+    assert spec["peak_tflops"][4] == 9000.0
+    assert spec["memory_bandwidth_gbs"] == 8000.0
+    assert spec["memory_capacity_gb"] == 192.0
+
+
+def test_mi300x_amd_specs_load():
+    """MI300X must expose 1307 TFLOPS BF16 dense, 5.3 TB/s, 192 GB."""
+    from emulator.hardware import HARDWARE_SPECS
+    spec = HARDWARE_SPECS["1xMI300X"]
+    assert spec["peak_tflops"][16] == 1307.0
+    assert spec["memory_bandwidth_gbs"] == 5300.0
+    assert spec["memory_capacity_gb"] == 192.0
+
+
+def test_b200_decodes_70b_faster_than_h100_proportionally_to_bandwidth():
+    """Llama-70B decode on B200 vs H100: weights load (memory-bound) scales
+    with MBW ratio 8000/3350 ≈ 2.39×. Tolerate ±5% drift from KV-term."""
+    common = dict(
+        n_params_b=70, bits=16, p_in=1024, p_out=256, batch=1,
+        alpha=0.47, beta=0.65,
+    )
+    h100 = predict(peak_flops=get_peak_compute("1xH100", 16),
+                   mem_bw=get_memory_bandwidth("1xH100"), **common)
+    b200 = predict(peak_flops=get_peak_compute("1xB200", 16),
+                   mem_bw=get_memory_bandwidth("1xB200"), **common)
+    assert h100.bottleneck_decode == "memory"
+    assert b200.bottleneck_decode == "memory"
+    expected = 8000.0 / 3350.0
+    actual = h100.decode_per_token_s / b200.decode_per_token_s
+    assert abs(actual / expected - 1.0) < 0.05, (
+        f"decode speedup {actual:.2f}× vs expected {expected:.2f}×"
+    )
+
+
 def test_defaults_preserve_legacy_behavior():
     """A call with no vLLM-style kwargs must produce the same result as
     pre-vLLM code. This locks the back-compat contract."""
@@ -601,6 +704,13 @@ if __name__ == "__main__":
     test_speculative_draft_physics_path()
     test_speculative_draft_validates_against_target_size()
     test_speculative_eagle_like_published_numbers()
+    test_chunked_prefill_neutral_when_compute_bound()
+    test_chunked_prefill_overhead_when_memory_bound()
+    test_chunked_prefill_smaller_than_chunk_is_noop()
+    test_chunked_prefill_validates_chunk_size()
+    test_b200_blackwell_specs_load()
+    test_mi300x_amd_specs_load()
+    test_b200_decodes_70b_faster_than_h100_proportionally_to_bandwidth()
     test_batch_saturation_asymptote()
     test_batch_saturation_clipped_by_queue()
     test_kv_packing_eff_inflates_memory_for_naive_allocator()

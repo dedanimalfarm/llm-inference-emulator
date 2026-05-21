@@ -90,6 +90,11 @@ def main():
     p.add_argument("--spec-verify-scale", type=float, default=0.05,
                    help="Per-K cost penalty on target verify pass. "
                         "Default 0.05 from vLLM/EAGLE measurements.")
+    p.add_argument("--chunked-prefill", action="store_true",
+                   help="Model vLLM/SGLang chunked prefill (each chunk pays "
+                        "its own weight-load tax).")
+    p.add_argument("--chunk-size", type=int, default=2048,
+                   help="Tokens per prefill chunk (default 2048; vLLM uses 512).")
     args = p.parse_args()
 
     eng = ENGINE_DEFAULTS[args.engine]
@@ -142,6 +147,8 @@ def main():
         spec_draft_n_params_b=args.spec_draft_b,
         spec_draft_active_b=args.spec_draft_active_b,
         spec_verify_scale=args.spec_verify_scale,
+        chunked_prefill=args.chunked_prefill,
+        chunk_size=args.chunk_size,
     )
 
     # MoE: figure out the effective active count for the printout (CLI override > ARCH_DEFAULTS > dense).

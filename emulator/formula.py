@@ -119,6 +119,8 @@ def predict(
     n_active_b: Optional[float] = None,
     head_dim: Optional[int] = None,
     sliding_window: Optional[int] = None,
+    chunked_prefill: bool = False,
+    chunk_size: int = 2048,
 ) -> InferenceResult:
     """Predict inference performance.
 
@@ -167,6 +169,16 @@ def predict(
               both per-step KV read cost and total KV memory are capped
               at this value. Defaults to None (unbounded) for classic
               full attention; Mistral/Gemma/DeepSeek-V4 set 128–4096.
+    chunked_prefill: model vLLM/SGLang chunked prefill, where the prompt
+              is split into pieces of `chunk_size` tokens, each processed
+              in its own forward pass. Total compute is unchanged (same
+              FLOPS); the cost is the weight-load tax — each chunk pays
+              `W / eff_mbw` separately. Neutral when prefill is
+              compute-bound (large P_in / small W), adds overhead when
+              memory-bound (short P_in / large W). Enables mixing decode
+              tokens into the same iteration in real schedulers.
+    chunk_size: tokens per prefill chunk (vLLM default 512; SGLang 2048).
+              Default 2048 here matches a common production setting.
     """
     # Pull architectural defaults if not explicitly provided.
     arch_lookup_needed = (layers is None or d_model is None or
@@ -223,13 +235,37 @@ def predict(
     # Compute term scales with bs_eff (active concurrency), not raw batch.
     # For MoE: FLOPS use N_active (only routed experts execute per token);
     # memory still uses W (all experts live in VRAM).
+    #
+    # Chunked prefill (vLLM/SGLang): split P_in_eff into ceil(P/C) chunks
+    # of size `chunk_size`. Total FLOPS are unchanged (each token still
+    # gets one forward pass through MLP+attn), but weight memory is paid
+    # PER CHUNK — each forward pass reloads W from HBM. For long prompts
+    # in compute-bound regime this is free; for short prompts where
+    # prefill is memory-bound, it multiplies the weight-load tax by
+    # N_chunks. The benefit (scheduling decode tokens between chunks) is
+    # a throughput effect at the system level and is not captured here.
     p_in_eff = p_in * (1.0 - prefix_cache_hit)
-    t_pre_compute = 2.0 * N_active * p_in_eff * bs_eff / (eff_flops * alpha)
-    t_pre_mem     = W / eff_mbw
-    if t_pre_compute >= t_pre_mem:
-        t_pre, b_pre = t_pre_compute, "compute"
+    if chunked_prefill:
+        if chunk_size <= 0:
+            raise ValueError(f"chunk_size must be > 0, got {chunk_size}")
+        if p_in_eff <= 0:
+            n_chunks = 1
+            per_chunk_tokens = 0.0
+        else:
+            n_chunks = max(1, int((p_in_eff + chunk_size - 1) // chunk_size))
+            per_chunk_tokens = p_in_eff / n_chunks
+        t_chunk_compute = 2.0 * N_active * per_chunk_tokens * bs_eff / (eff_flops * alpha)
+        t_chunk_mem     = W / eff_mbw
+        t_chunk = max(t_chunk_compute, t_chunk_mem)
+        t_pre = n_chunks * t_chunk
+        b_pre = "compute" if t_chunk_compute >= t_chunk_mem else "memory"
     else:
-        t_pre, b_pre = t_pre_mem, "memory"
+        t_pre_compute = 2.0 * N_active * p_in_eff * bs_eff / (eff_flops * alpha)
+        t_pre_mem     = W / eff_mbw
+        if t_pre_compute >= t_pre_mem:
+            t_pre, b_pre = t_pre_compute, "compute"
+        else:
+            t_pre, b_pre = t_pre_mem, "memory"
 
     # ---- decode (single token, static base) ----
     # Memory term is independent of batch (weights read once per step).
