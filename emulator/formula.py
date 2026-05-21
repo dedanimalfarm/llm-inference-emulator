@@ -24,6 +24,37 @@ class InferenceResult:
     # decode-per-token time against the non-speculative baseline.
     spec_e_accept: Optional[float] = None
     spec_speedup: Optional[float] = None
+    alpha_eff: Optional[float] = None
+    mla_kv_lora_rank: Optional[int] = None
+    mla_qk_rope_dim: Optional[int] = None
+    comm_link: Optional[str] = None
+    comm_link_bw: Optional[float] = None
+    comm_link_latency: Optional[float] = None
+    tp_comm_prefill_s: Optional[float] = None
+    tp_comm_decode_s: Optional[float] = None
+    pp_comm_prefill_s: Optional[float] = None
+    pp_comm_decode_s: Optional[float] = None
+
+
+INTERCONNECT_PROFILES = {
+    "nvlink":   {"bw_gbs": 450.0, "latency_s": 1.5e-6, "desc": "NVLink (SXM)"},
+    "pcie5":    {"bw_gbs": 63.0,  "latency_s": 2.5e-6, "desc": "PCIe Gen 5 x16"},
+    "pcie4":    {"bw_gbs": 31.5,  "latency_s": 3.0e-6, "desc": "PCIe Gen 4 x16"},
+    "pcie3":    {"bw_gbs": 15.8,  "latency_s": 4.0e-6, "desc": "PCIe Gen 3 x16"},
+    "ethernet": {"bw_gbs": 12.5,  "latency_s": 50.0e-6, "desc": "100 Gbps Ethernet"},
+}
+
+
+def _infer_comm_link(hw: str) -> str:
+    # server-class SXM GPUs default to NVLink
+    if any(x in hw for x in ["A100", "H100", "H200", "B200", "MI300X", "MI325X"]):
+        return "nvlink"
+    # modern high-end consumer GPUs default to PCIe Gen 5
+    elif "5090" in hw:
+        return "pcie5"
+    # legacy/mid consumer GPUs default to PCIe Gen 4
+    else:
+        return "pcie4"
 
 
 # Rough heuristic shapes for typical decoder-only architectures.
@@ -69,13 +100,16 @@ ARCH_DEFAULTS = {
     # → effective head_dim ≈ 288.
     284.0:{"layers": 43, "d_model": 4096, "kv_heads": 1,
            "head_dim": 288, "sliding_window": 128,
-           "n_active_b": 13.0},                                # DeepSeek-V4-Flash (MLA, 256 exp, top-6) — speculative
+           "n_active_b": 13.0,
+           "mla_kv_lora_rank": 512, "mla_qk_rope_dim": 64},    # DeepSeek-V4-Flash (MLA, 256 exp, top-6) — speculative
     671.0:{"layers": 61, "d_model": 7168, "kv_heads": 1,
            "head_dim": 288,
-           "n_active_b": 37.0},                                # DeepSeek-V3 (MLA, kv_lora=512+rope=64, 256 exp, top-8)
+           "n_active_b": 37.0,
+           "mla_kv_lora_rank": 512, "mla_qk_rope_dim": 64},    # DeepSeek-V3 (MLA, kv_lora=512+rope=64, 256 exp, top-8)
     1600.0:{"layers": 61, "d_model": 7168, "kv_heads": 1,
             "head_dim": 288, "sliding_window": 128,
-            "n_active_b": 49.0},                               # DeepSeek-V4-Pro (MLA, 384 exp, top-6) — speculative
+            "n_active_b": 49.0,
+            "mla_kv_lora_rank": 512, "mla_qk_rope_dim": 64},   # DeepSeek-V4-Pro (MLA, 384 exp, top-6) — speculative
 }
 
 
@@ -121,6 +155,14 @@ def predict(
     sliding_window: Optional[int] = None,
     chunked_prefill: bool = False,
     chunk_size: int = 2048,
+    alpha_sat_b0: Optional[float] = None,
+    mla_kv_lora_rank: Optional[int] = None,
+    mla_qk_rope_dim: Optional[int] = None,
+    pp_size: int = 1,
+    comm_link: Optional[str] = None,
+    comm_link_bw: Optional[float] = None,
+    comm_link_latency: Optional[float] = None,
+    hw: Optional[str] = None,
 ) -> InferenceResult:
     """Predict inference performance.
 
@@ -182,8 +224,9 @@ def predict(
     """
     # Pull architectural defaults if not explicitly provided.
     arch_lookup_needed = (layers is None or d_model is None or
-                         n_active_b is None or head_dim is None or
-                         sliding_window is None)
+                          n_active_b is None or head_dim is None or
+                          sliding_window is None or mla_kv_lora_rank is None or
+                          mla_qk_rope_dim is None)
     if arch_lookup_needed:
         arch = _arch_for(n_params_b)
         layers = arch["layers"] if layers is None else layers
@@ -195,6 +238,10 @@ def predict(
             head_dim = arch.get("head_dim", 128)
         if sliding_window is None:
             sliding_window = arch.get("sliding_window")  # may stay None
+        if mla_kv_lora_rank is None:
+            mla_kv_lora_rank = arch.get("mla_kv_lora_rank")
+        if mla_qk_rope_dim is None:
+            mla_qk_rope_dim = arch.get("mla_qk_rope_dim")
     if n_active_b is None:
         n_active_b = n_params_b
     if head_dim is None:
@@ -206,6 +253,10 @@ def predict(
         raise ValueError(f"kv_packing_eff must be in (0, 1], got {kv_packing_eff}")
     if n_active_b > n_params_b:
         raise ValueError(f"n_active_b ({n_active_b}B) must be <= n_params_b ({n_params_b}B)")
+    if mla_kv_lora_rank is not None and mla_kv_lora_rank <= 0:
+        raise ValueError(f"mla_kv_lora_rank must be > 0, got {mla_kv_lora_rank}")
+    if mla_qk_rope_dim is not None and mla_qk_rope_dim <= 0:
+        raise ValueError(f"mla_qk_rope_dim must be > 0, got {mla_qk_rope_dim}")
 
     N = n_params_b * 1e9
     N_active = n_active_b * 1e9
@@ -228,6 +279,14 @@ def predict(
         bs_eff = min(float(batch), max(floor, hill))
     else:
         bs_eff = float(batch)
+
+    import math
+    if alpha_sat_b0 is not None:
+        if alpha_sat_b0 <= 0:
+            raise ValueError(f"alpha_sat_b0 must be > 0, got {alpha_sat_b0}")
+        alpha_eff = alpha * (1.0 - math.exp(-batch / alpha_sat_b0))
+    else:
+        alpha_eff = alpha
 
     # ---- prefill ----
     # Prefix caching: cached tokens skip the matmul entirely. Memory term
@@ -254,13 +313,13 @@ def predict(
         else:
             n_chunks = max(1, int((p_in_eff + chunk_size - 1) // chunk_size))
             per_chunk_tokens = p_in_eff / n_chunks
-        t_chunk_compute = 2.0 * N_active * per_chunk_tokens * bs_eff / (eff_flops * alpha)
+        t_chunk_compute = 2.0 * N_active * per_chunk_tokens * bs_eff / (eff_flops * alpha_eff)
         t_chunk_mem     = W / eff_mbw
         t_chunk = max(t_chunk_compute, t_chunk_mem)
         t_pre = n_chunks * t_chunk
         b_pre = "compute" if t_chunk_compute >= t_chunk_mem else "memory"
     else:
-        t_pre_compute = 2.0 * N_active * p_in_eff * bs_eff / (eff_flops * alpha)
+        t_pre_compute = 2.0 * N_active * p_in_eff * bs_eff / (eff_flops * alpha_eff)
         t_pre_mem     = W / eff_mbw
         if t_pre_compute >= t_pre_mem:
             t_pre, b_pre = t_pre_compute, "compute"
@@ -277,7 +336,7 @@ def predict(
     # is likely to touch every expert, so t_pre_mem keeps using full W.
     weight_read_fraction = N_active / N
     t_dec_mem     = W * weight_read_fraction / (eff_mbw * beta)
-    t_dec_compute = 2.0 * N_active * bs_eff / (eff_flops * alpha)
+    t_dec_compute = 2.0 * N_active * bs_eff / (eff_flops * alpha_eff)
     if t_dec_mem >= t_dec_compute:
         t_dec_base, b_dec = t_dec_mem, "memory"
     else:
@@ -297,7 +356,9 @@ def predict(
     # head_dim defaults to 128 (universal for dense LLMs); MLA models like
     # DeepSeek V3/V4 use larger values (typically 512) to represent the
     # compressed latent KV.
-    if kv_heads is not None:
+    if mla_kv_lora_rank is not None and mla_qk_rope_dim is not None:
+        kv_per_token_bytes = layers * (mla_kv_lora_rank + mla_qk_rope_dim) * kv_bits_k / 8.0
+    elif kv_heads is not None:
         kv_per_token_bytes = layers * kv_heads * head_dim * (kv_bits_k + kv_bits_v) / 8.0
     else:
         # Fallback to full attention if kv_heads not specified
@@ -305,6 +366,59 @@ def predict(
 
     t_kv = kv_per_token_bytes * avg_ctx / (eff_mbw * beta)
     t_dec = t_dec_base + t_kv
+
+    # ---- Communication / Network Overheads (TP/PP) ----
+    tp_comm_prefill = 0.0
+    tp_comm_decode = 0.0
+    pp_comm_prefill = 0.0
+    pp_comm_decode = 0.0
+    resolved_link = None
+    link_bw = None
+    link_latency = None
+
+    if comm_link is not None and comm_link != "none":
+        resolved_link = comm_link
+        if resolved_link == "Auto":
+            if hw:
+                resolved_link = _infer_comm_link(hw)
+            else:
+                # Fallback based on peak_flops: high-end SXM server cards connected via NVLink
+                if eff_flops >= 300e12:
+                    resolved_link = "nvlink"
+                else:
+                    resolved_link = "pcie4"
+
+        profile = INTERCONNECT_PROFILES.get(resolved_link, INTERCONNECT_PROFILES["pcie4"])
+        link_bw = comm_link_bw if comm_link_bw is not None else profile["bw_gbs"]
+        link_latency = comm_link_latency if comm_link_latency is not None else profile["latency_s"]
+
+        # convert link_bw from GB/s to bytes/s
+        link_bw_bytes = link_bw * 1e9
+
+        if tp_size > 1:
+            # Ring All-Reduce modeling: 2 All-Reduces per transformer layer
+            # Ring All-Reduce sends and receives 2 * ((tp_size - 1)/tp_size) * volume
+            # Activation volume per token: d_model * 2.0 (FP16/BF16 activations)
+            # Megatron-LM All-Reduce happens twice per layer (Attention projection output & MLP Down projection output)
+            # Prefill processes bs_eff * p_in_eff tokens concurrently
+            t_pre_tokens = bs_eff * p_in_eff
+            t_pre_ar = 4.0 * (tp_size - 1) * link_latency + 4.0 * ((tp_size - 1) / tp_size) * (t_pre_tokens * d_model * 2.0) / link_bw_bytes
+            tp_comm_prefill = layers * t_pre_ar
+
+            # Decode processes bs_eff tokens concurrently per step
+            t_dec_ar = 4.0 * (tp_size - 1) * link_latency + 4.0 * ((tp_size - 1) / tp_size) * (bs_eff * d_model * 2.0) / link_bw_bytes
+            tp_comm_decode = layers * t_dec_ar
+
+        if pp_size > 1:
+            # Pipeline Parallelism stage boundaries sequential transfer modeling
+            # Transfer volume: tokens * d_model * 2.0 bytes
+            t_pre_tokens = bs_eff * p_in_eff
+            pp_comm_prefill = (pp_size - 1) * (link_latency + (t_pre_tokens * d_model * 2.0) / link_bw_bytes)
+            pp_comm_decode = (pp_size - 1) * (link_latency + (bs_eff * d_model * 2.0) / link_bw_bytes)
+
+    # Add communication times to baseline latency values
+    t_pre_final = t_pre + tp_comm_prefill + pp_comm_prefill
+    t_dec = t_dec + tp_comm_decode + pp_comm_decode
 
     # ---- Speculative decoding ----
     # Leviathan et al. 2022 "Fast Inference from Transformers via Speculative
@@ -374,9 +488,9 @@ def predict(
         ctx_kept = min(ctx_kept, sliding_window)
     kv_total = kv_per_token_bytes * ctx_kept * batch / kv_packing_eff
 
-    total_latency = t_pre + p_out * t_dec_final
+    total_latency = t_pre_final + p_out * t_dec_final
     return InferenceResult(
-        prefill_s=t_pre,
+        prefill_s=t_pre_final,
         decode_per_token_s=t_dec_final,
         total_latency_s=total_latency,
         throughput_tok_s=bs_eff / t_dec_final,
@@ -385,4 +499,14 @@ def predict(
         bottleneck_decode=b_dec,
         spec_e_accept=e_accept,
         spec_speedup=spec_speedup,
+        alpha_eff=alpha_eff,
+        mla_kv_lora_rank=mla_kv_lora_rank,
+        mla_qk_rope_dim=mla_qk_rope_dim,
+        comm_link=resolved_link,
+        comm_link_bw=link_bw,
+        comm_link_latency=link_latency,
+        tp_comm_prefill_s=tp_comm_prefill,
+        tp_comm_decode_s=tp_comm_decode,
+        pp_comm_prefill_s=pp_comm_prefill,
+        pp_comm_decode_s=pp_comm_decode,
     )

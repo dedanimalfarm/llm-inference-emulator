@@ -128,6 +128,13 @@ DEFAULTS = {
     "adv_alpha": 0.2,
     "adv_ob": False,
     "adv_beta": 0.4,
+    "adv_alpha_sat": 0.0,
+    "adv_mla_rank": 0,
+    "adv_mla_rope": 0,
+    "adv_pp": 1,
+    "adv_comm_link": "Auto",
+    "adv_comm_bw": 0.0,
+    "adv_comm_lat": 0.0,
     # snapshot of all inputs captured on last "Predict" press; None = boot state
     "pred_snapshot": None,
 }
@@ -241,6 +248,13 @@ def build_pred_inputs() -> dict:
         "alpha_in": float(s["adv_alpha"]),
         "override_beta": bool(s["adv_ob"]),
         "beta_in": float(s["adv_beta"]),
+        "alpha_sat_b0": float(s["adv_alpha_sat"]) if s["adv_alpha_sat"] > 0 else None,
+        "mla_kv_lora_rank": int(s["adv_mla_rank"]) if s["adv_mla_rank"] > 0 else None,
+        "mla_qk_rope_dim": int(s["adv_mla_rope"]) if s["adv_mla_rope"] > 0 else None,
+        "pp_size": int(s["adv_pp"]),
+        "comm_link": s["adv_comm_link"],
+        "comm_link_bw": float(s["adv_comm_bw"]) if s["adv_comm_bw"] > 0 else None,
+        "comm_link_latency": float(s["adv_comm_lat"]) / 1e3 if s["adv_comm_lat"] > 0 else None,
     }
 
 
@@ -357,7 +371,7 @@ with tab_pred:
         c3.number_input("📦 Batch size", min_value=1, max_value=2048,
                         key="wk_batch", step=1)
 
-        with st.expander("⚙️ Дополнительно — KV bits, sliding window, $/час, ручной α/β"):
+        with st.expander("⚙️ Дополнительно — KV bits, MLA, sliding window, $/час, ручной α/β"):
             a1, a2, a3, a4 = st.columns(4)
             with a1:
                 st.number_input("KV-K bits", step=4.0,
@@ -367,12 +381,15 @@ with tab_pred:
             with a2:
                 st.number_input("Sliding window (0 = unbounded)",
                                 min_value=0, max_value=131072, key="adv_sw")
-                st.number_input("head_dim",
+                st.number_input("head_dim (GQA)",
                                 min_value=32, max_value=1024,
                                 step=32, key="adv_hd")
             with a3:
                 st.number_input("Cost $/hour (0 = off)",
                                 min_value=0.0, step=0.5, key="adv_cost")
+                st.number_input("Alpha Saturation b0 (0=off)",
+                                min_value=0.0, step=1.0, key="adv_alpha_sat",
+                                help="Задаёт параметр насыщения MFU батча b0.")
             with a4:
                 st.checkbox("Override α", key="adv_oa")
                 st.number_input("α", step=0.05, key="adv_alpha",
@@ -380,6 +397,24 @@ with tab_pred:
                 st.checkbox("Override β", key="adv_ob")
                 st.number_input("β", step=0.05, key="adv_beta",
                                 disabled=not st.session_state.get("adv_ob", False))
+            
+            st.markdown("**Native Multi-Head Latent Attention (MLA) overrides (DeepSeek V3/V4):**")
+            ma1, ma2 = st.columns(2)
+            ma1.number_input("MLA KV Lora Rank (0 = GQA)", min_value=0, max_value=2048, step=64, key="adv_mla_rank",
+                             help="Ранг латентного сжатия KV (DeepSeek-V3 = 512). При 0 используется стандартный GQA.")
+            ma2.number_input("MLA QK RoPE Head Dim (0 = GQA)", min_value=0, max_value=512, step=16, key="adv_mla_rope",
+                             help="Размерность decoupled Key RoPE проекции (DeepSeek-V3 = 64). При 0 используется стандартный GQA.")
+
+            st.markdown("**Распределенное моделирование коммуникаций (TP/PP) & Сеть:**")
+            net1, net2, net3, net4 = st.columns(4)
+            net1.number_input("Pipeline Parallelism (PP) Size", min_value=1, max_value=64, step=1, key="adv_pp",
+                              help="Количество стадий пайплайна (PP). Распределяет слои последовательно.")
+            net2.selectbox("Интерконнект (Comm Link)", ["Auto", "none", "nvlink", "pcie5", "pcie4", "pcie3", "ethernet"], key="adv_comm_link",
+                           help="Тип сетевого соединения для моделирования задержек TP и PP. 'Auto' выбирает NVLink для серверных GPU, PCIe для десктопных.")
+            net3.number_input("Полоса линка (Link BW, GB/s)", min_value=0.0, step=10.0, key="adv_comm_bw",
+                              help="Перекрывает стандартную пропускную способность профиля (0.0 = по умолчанию для выбранного линка).")
+            net4.number_input("Задержка линка (Link Latency, ms)", min_value=0.0, step=0.001, format="%.4f", key="adv_comm_lat",
+                              help="Перекрывает стандартный пинг сетевого линка (0.0 = по умолчанию для выбранного линка).")
 
         st.divider()
         submitted = st.form_submit_button(
@@ -468,6 +503,14 @@ with tab_pred:
             n_active_b=snap["active_b"],
             head_dim=head_dim,
             sliding_window=sliding_window,
+            alpha_sat_b0=snap.get("alpha_sat_b0"),
+            mla_kv_lora_rank=snap.get("mla_kv_lora_rank"),
+            mla_qk_rope_dim=snap.get("mla_qk_rope_dim"),
+            pp_size=snap["pp_size"],
+            comm_link=snap["comm_link"],
+            comm_link_bw=snap["comm_link_bw"],
+            comm_link_latency=snap["comm_link_latency"],
+            hw=snap["hw"],
         )
 
         # ---- Results ----
@@ -542,13 +585,33 @@ with tab_pred:
         t_dec_mem = W * (N_active / N) / (eff_mbw * beta)
         t_dec_compute = 2.0 * N_active * bs_eff / (eff_flops * alpha)
 
-        breakdown = pd.DataFrame([
+        t_tp_comm_prefill = res.tp_comm_prefill_s or 0.0
+        t_pp_comm_prefill = res.pp_comm_prefill_s or 0.0
+        t_tp_comm_decode = res.tp_comm_decode_s or 0.0
+        t_pp_comm_decode = res.pp_comm_decode_s or 0.0
+
+        breakdown_rows = [
             {"phase": "Prefill", "term": "compute  2·N_act·P_in·bs / (C·α)",
              "ms": t_pre_compute * 1000,
              "winner": res.bottleneck_prefill == "compute"},
             {"phase": "Prefill", "term": "memory   W / MBW (один проход весов)",
              "ms": t_pre_mem * 1000,
              "winner": res.bottleneck_prefill == "memory"},
+        ]
+        if t_tp_comm_prefill > 0:
+            breakdown_rows.append({
+                "phase": "Prefill", "term": "TP All-Reduce network overhead",
+                "ms": t_tp_comm_prefill * 1000,
+                "winner": True
+            })
+        if t_pp_comm_prefill > 0:
+            breakdown_rows.append({
+                "phase": "Prefill", "term": "PP boundary transfer overhead",
+                "ms": t_pp_comm_prefill * 1000,
+                "winner": True
+            })
+
+        breakdown_rows.extend([
             {"phase": "Decode", "term": "memory   W·(N_act/N) / (MBW·β)",
              "ms": t_dec_mem * 1000,
              "winner": res.bottleneck_decode == "memory"},
@@ -556,6 +619,20 @@ with tab_pred:
              "ms": t_dec_compute * 1000,
              "winner": res.bottleneck_decode == "compute"},
         ])
+        if t_tp_comm_decode > 0:
+            breakdown_rows.append({
+                "phase": "Decode", "term": "TP All-Reduce network overhead",
+                "ms": t_tp_comm_decode * 1000,
+                "winner": True
+            })
+        if t_pp_comm_decode > 0:
+            breakdown_rows.append({
+                "phase": "Decode", "term": "PP boundary transfer overhead",
+                "ms": t_pp_comm_decode * 1000,
+                "winner": True
+            })
+
+        breakdown = pd.DataFrame(breakdown_rows)
         chart = alt.Chart(breakdown).mark_bar().encode(
             x=alt.X("ms:Q", title="миллисекунды"),
             y=alt.Y("term:N", sort=None, title=""),
@@ -605,7 +682,42 @@ with tab_pred:
         for line in interp_lines:
             st.markdown(line)
 
+        if (res.tp_comm_prefill_s and res.tp_comm_prefill_s > 0) or (res.pp_comm_prefill_s and res.pp_comm_prefill_s > 0):
+            link_info = f"{res.comm_link.upper()}"
+            if res.comm_link_bw is not None:
+                link_info += f" ({res.comm_link_bw:.1f} GB/s"
+            if res.comm_link_latency is not None:
+                link_info += f", {res.comm_link_latency * 1e6:.1f} µs latency)"
+            else:
+                link_info += ")"
+            
+            st.warning(
+                f"🌐 **Коммуникационные задержки ({link_info}):**\n\n"
+                f"- **TP All-Reduce (Ring):** Prefill = {t_tp_comm_prefill * 1000:.2f} ms, Decode = {t_tp_comm_decode * 1000:.3f} ms/token\n"
+                f"- **PP stage-to-stage boundary:** Prefill = {t_pp_comm_prefill * 1000:.2f} ms, Decode = {t_pp_comm_decode * 1000:.3f} ms/token\n\n"
+                "Эти сетевые задержки добавлены поверх времени вычислений и памяти в соответствии с топологией Megatron-LM."
+            )
+
         with st.expander("🔢 Сырые числа (W, C, MBW, batch_eff)"):
+            alpha_eff_str = f"alpha_effective (MFU)   = {res.alpha_eff:.4f}\n" if res.alpha_eff is not None else ""
+            mla_str = ""
+            if res.mla_kv_lora_rank is not None and res.mla_qk_rope_dim is not None:
+                mla_str = (f"mla_kv_lora_rank        = {res.mla_kv_lora_rank}\n"
+                           f"mla_qk_rope_dim         = {res.mla_qk_rope_dim}\n")
+            
+            comm_str = ""
+            if res.comm_link is not None:
+                comm_str = (
+                    f"comm_link               = {res.comm_link}\n"
+                    f"comm_link_bw            = {res.comm_link_bw:.1f} GB/s\n"
+                    f"comm_link_latency_us    = {res.comm_link_latency * 1e6:.2f} µs\n"
+                    f"pp_size                 = {snap['pp_size']}\n"
+                    f"tp_comm_prefill_ms      = {t_tp_comm_prefill * 1000:.3f} ms\n"
+                    f"tp_comm_decode_ms       = {t_tp_comm_decode * 1000:.3f} ms\n"
+                    f"pp_comm_prefill_ms      = {t_pp_comm_prefill * 1000:.3f} ms\n"
+                    f"pp_comm_decode_ms       = {t_pp_comm_decode * 1000:.3f} ms\n"
+                )
+
             st.code(
                 f"W (weight bytes)        = {W / 1e9:.3f} GB\n"
                 f"C (peak compute)        = {eff_flops / 1e12:.1f} TFLOPS  "
@@ -615,9 +727,12 @@ with tab_pred:
                 f"batch_effective         = {bs_eff:.2f}  "
                 + (f"(Hill: max={batch_saturation[0]}, 50%={batch_saturation[1]})"
                    if batch_saturation else "(no saturation)") + "\n"
-                f"alpha (MFU)             = {alpha:.4f}\n"
-                f"beta (MBU)              = {beta:.4f}\n"
-                f"kv_packing_eff          = {eng_spec['kv_packing_eff']}",
+                f"alpha (MFU preset)      = {alpha:.4f}\n"
+                + alpha_eff_str
+                + mla_str
+                + f"beta (MBU)              = {beta:.4f}\n"
+                f"kv_packing_eff          = {eng_spec['kv_packing_eff']}\n"
+                + comm_str,
                 language="text",
             )
 
@@ -869,7 +984,7 @@ with tab_sca:
     if df_pva.empty:
         st.warning("`results/prediction_vs_actual.csv` не найден.")
     else:
-        c1, c2, c3 = st.columns(3)
+        c1, c2, c3, c4 = st.columns(4)
         with c1:
             modes = sorted(df_pva["mode"].unique())
             preferred = next((m for m in ("fine", "coarse") if m in modes), modes[0])
@@ -882,6 +997,10 @@ with tab_sca:
             hw_filter = st.multiselect("Hardware", hws, default=hws)
         with c3:
             metric = st.radio("Метрика", ["prefill", "decode"], horizontal=True)
+        with c4:
+            plot_type = st.radio("Тип графика", ["Scatter Plot", "Density Heatmap"], horizontal=True,
+                                 index=1,
+                                 help="Scatter Plot показывает отдельные точки (лимит 5k). Density Heatmap строит красивую 2D-гистограмму плотности для всех 9.9k точек без лагов.")
 
         sub = df_pva[(df_pva["mode"] == mode) & (df_pva["hw"].isin(hw_filter))].copy()
         if metric == "prefill":
@@ -900,30 +1019,57 @@ with tab_sca:
         if sub.empty:
             st.info("Нет данных под выбранные фильтры.")
         else:
-            sub_capped = sub.head(5000)
-            scatter = alt.Chart(sub_capped).mark_circle(size=40, opacity=0.45).encode(
-                x=alt.X("obs:Q", scale=alt.Scale(type="log"),
-                        title=f"observed ({unit}, log)"),
-                y=alt.Y("pred:Q", scale=alt.Scale(type="log"),
-                        title=f"predicted ({unit}, log)"),
-                color=alt.Color("hw:N"),
-                tooltip=["hw", "model", "precision", "attention",
-                         alt.Tooltip("obs:Q", format=".3g"),
-                         alt.Tooltip("pred:Q", format=".3g"),
-                         alt.Tooltip("rel_err:Q", format=".2f")],
-            )
-            lo = max(min(sub_capped["obs"].min(), sub_capped["pred"].min()), 1e-4)
-            hi = max(sub_capped["obs"].max(), sub_capped["pred"].max())
-            diag = alt.Chart(pd.DataFrame({"x": [lo, hi]})).mark_line(
-                color="#888", strokeDash=[4, 4]
-            ).encode(x="x:Q", y="x:Q")
-            st.altair_chart((scatter + diag).properties(height=440),
-                            width="stretch")
-            st.caption(
-                f"Показано {len(sub_capped):,} из {len(sub):,} точек "
-                "(жёсткий cap 5k чтобы Altair не тормозил). "
-                "Диагональ — идеальное предсказание."
-            )
+            import numpy as np
+            if plot_type == "Density Heatmap":
+                # Compute log10 values for beautiful grid alignment
+                sub["log_obs"] = np.log10(sub["obs"])
+                sub["log_pred"] = np.log10(sub["pred"])
+                
+                heatmap = alt.Chart(sub).mark_rect().encode(
+                    x=alt.X("log_obs:Q", bin=alt.Bin(maxbins=35), title=f"observed ({unit}, log10)"),
+                    y=alt.Y("log_pred:Q", bin=alt.Bin(maxbins=35), title=f"predicted ({unit}, log10)"),
+                    color=alt.Color("count():Q", scale=alt.Scale(scheme="viridis"), title="Точек в бине"),
+                    tooltip=[
+                        alt.Tooltip("count():Q", title="Точек в бине"),
+                    ]
+                )
+                
+                lo = max(min(sub["log_obs"].min(), sub["log_pred"].min()), -4.0)
+                hi = max(sub["log_obs"].max(), sub["log_pred"].max())
+                diag = alt.Chart(pd.DataFrame({"x": [lo, hi]})).mark_line(
+                    color="#f58518", strokeDash=[4, 4], strokeWidth=2
+                ).encode(x="x:Q", y="x:Q")
+                
+                st.altair_chart((heatmap + diag).properties(height=440), width="stretch")
+                st.caption(
+                    f"Показано тепловое распределение всех {len(sub):,} бенчмарк-точек. "
+                    "Оранжевый пунктир — идеальная диагональ."
+                )
+            else:
+                sub_capped = sub.head(5000)
+                scatter = alt.Chart(sub_capped).mark_circle(size=40, opacity=0.45).encode(
+                    x=alt.X("obs:Q", scale=alt.Scale(type="log"),
+                            title=f"observed ({unit}, log)"),
+                    y=alt.Y("pred:Q", scale=alt.Scale(type="log"),
+                            title=f"predicted ({unit}, log)"),
+                    color=alt.Color("hw:N"),
+                    tooltip=["hw", "model", "precision", "attention",
+                             alt.Tooltip("obs:Q", format=".3g"),
+                             alt.Tooltip("pred:Q", format=".3g"),
+                             alt.Tooltip("rel_err:Q", format=".2f")],
+                )
+                lo = max(min(sub_capped["obs"].min(), sub_capped["pred"].min()), 1e-4)
+                hi = max(sub_capped["obs"].max(), sub_capped["pred"].max())
+                diag = alt.Chart(pd.DataFrame({"x": [lo, hi]})).mark_line(
+                    color="#888", strokeDash=[4, 4]
+                ).encode(x="x:Q", y="x:Q")
+                st.altair_chart((scatter + diag).properties(height=440),
+                                width="stretch")
+                st.caption(
+                    f"Показано {len(sub_capped):,} из {len(sub):,} точек "
+                    "(жёсткий cap 5k чтобы Altair не тормозил). "
+                    "Диагональ — идеальное предсказание."
+                )
 
             st.markdown("### Медианная ошибка по железу")
             agg = sub.groupby("hw")["rel_err"].agg(["median", "count"]).reset_index()

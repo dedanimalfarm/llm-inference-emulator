@@ -686,6 +686,150 @@ def test_defaults_preserve_legacy_behavior():
     assert res.throughput_tok_s == explicit.throughput_tok_s
     assert res.memory_gb == explicit.memory_gb
 
+def test_mla_exact_matches_gqa_approximation():
+    """MLA exact formula with compressed ranks must match the historical GQA-like approximation.
+    For DeepSeek-V3, effective head_dim=288, heads=1, fp16 KV (factor 4 bytes/token/layer):
+    kv_per_token_bytes = layers * 1 * 288 * 4 = layers * 1152.
+    Native MLA with rank=512, rope=64, fp16 (factor 2 bytes/token/layer):
+    kv_per_token_bytes = layers * (512 + 64) * 2 = layers * 1152.
+    """
+    common = dict(
+        n_params_b=671.0, bits=4, p_in=1024, p_out=64, batch=1,
+        peak_flops=get_peak_compute("1xA100", 16),
+        mem_bw=get_memory_bandwidth("1xA100"),
+        alpha=0.30, beta=0.70,
+        layers=61, d_model=7168,
+    )
+    gqa_approx = predict(head_dim=288, kv_heads=1, **common)
+    mla_native = predict(mla_kv_lora_rank=512, mla_qk_rope_dim=64, **common)
+    assert abs(gqa_approx.memory_gb - mla_native.memory_gb) < 1e-6
+    assert abs(gqa_approx.decode_per_token_s - mla_native.decode_per_token_s) < 1e-9
+
+
+def test_batch_dependent_alpha_scaling():
+    """Smaller batches should scale MFU alpha down; larger batches saturate near the peak alpha."""
+    common = dict(
+        n_params_b=7.0, bits=16, p_in=2048, p_out=64,
+        peak_flops=get_peak_compute("1xA100", 16),
+        mem_bw=get_memory_bandwidth("1xA100"),
+        alpha=0.40, beta=0.70,
+        alpha_sat_b0=8.0,
+    )
+    b1 = predict(batch=1, **common)
+    b64 = predict(batch=64, **common)
+    assert b1.alpha_eff is not None
+    assert b64.alpha_eff is not None
+    assert 0.04 < b1.alpha_eff < 0.05
+    assert 0.398 < b64.alpha_eff < 0.40
+    # Per-request prefill latency is faster at batch=64 due to higher MFU alpha_eff
+    assert (b1.prefill_s / 1.0) > (b64.prefill_s / 64.0)
+
+
+def test_deepseek_models_auto_load_mla():
+    """DeepSeek models in ARCH_DEFAULTS must automatically load native MLA ranks if not provided."""
+    common = dict(
+        n_params_b=671.0, bits=4, p_in=1024, p_out=64, batch=1,
+        peak_flops=get_peak_compute("1xA100", 16),
+        mem_bw=get_memory_bandwidth("1xA100"),
+        alpha=0.30, beta=0.70,
+    )
+    res = predict(**common)
+    assert res.mla_kv_lora_rank == 512
+    assert res.mla_qk_rope_dim == 64
+
+
+def test_interconnect_inference():
+    """Verify that interconnect profiles are correctly inferred from hw string or default rules."""
+    from emulator.formula import _infer_comm_link
+    assert _infer_comm_link("1xH100") == "nvlink"
+    assert _infer_comm_link("2xRTX-5090") == "pcie5"
+    assert _infer_comm_link("1xRTX-4090") == "pcie4"
+    assert _infer_comm_link("8xMI300X") == "nvlink"
+
+
+def test_tp_allreduce_overhead_scaling():
+    """Verify that Tensor Parallelism Ring All-Reduce communication time scales with TP size."""
+    common = dict(
+        n_params_b=7.0, bits=16, p_in=256, p_out=64, batch=1,
+        peak_flops=get_peak_compute("1xA100", 16),
+        mem_bw=get_memory_bandwidth("1xA100"),
+        alpha=0.30, beta=0.70,
+        layers=32, d_model=4096, kv_heads=8,
+    )
+    
+    # baseline: no communication (comm_link=None or "none")
+    baseline = predict(tp_size=1, **common)
+    assert baseline.tp_comm_prefill_s == 0.0 or baseline.tp_comm_prefill_s is None
+    assert baseline.tp_comm_decode_s == 0.0 or baseline.tp_comm_decode_s is None
+
+    # With TP=2 and NVLink, compared to TP=2 without communication
+    tp2_no_comm = predict(tp_size=2, **common)
+    tp2 = predict(tp_size=2, comm_link="nvlink", **common)
+    assert tp2.comm_link == "nvlink"
+    assert tp2.tp_comm_prefill_s > 0.0
+    assert tp2.tp_comm_decode_s > 0.0
+    # Prefill and decode times should be strictly larger than without communication
+    assert tp2.prefill_s > tp2_no_comm.prefill_s
+    assert tp2.decode_per_token_s > tp2_no_comm.decode_per_token_s
+    
+    # With TP=4: Volume term per layer is 4 * (tp-1)/tp * volume.
+    # Latency term is 4 * (tp-1) * latency.
+    # So TP=4 should have larger total communication times than TP=2.
+    tp4 = predict(tp_size=4, comm_link="nvlink", **common)
+    assert tp4.tp_comm_prefill_s > tp2.tp_comm_prefill_s
+    assert tp4.tp_comm_decode_s > tp2.tp_comm_decode_s
+
+
+def test_pp_communication_overhead():
+    """Verify Pipeline Parallelism boundary sequential transfer penalties."""
+    common = dict(
+        n_params_b=70.0, bits=16, p_in=256, p_out=64, batch=1,
+        peak_flops=get_peak_compute("1xA100", 16),
+        mem_bw=get_memory_bandwidth("1xA100"),
+        alpha=0.30, beta=0.70,
+        layers=80, d_model=8192, kv_heads=8,
+    )
+    
+    # PP=1 (default): no PP communication
+    pp1 = predict(pp_size=1, comm_link="nvlink", **common)
+    assert pp1.pp_comm_prefill_s == 0.0 or pp1.pp_comm_prefill_s is None
+    assert pp1.pp_comm_decode_s == 0.0 or pp1.pp_comm_decode_s is None
+    
+    # PP=2: should have non-zero PP communication
+    pp2 = predict(pp_size=2, comm_link="nvlink", **common)
+    assert pp2.pp_comm_prefill_s > 0.0
+    assert pp2.pp_comm_decode_s > 0.0
+    
+    # PP=4: should have more communication than PP=2
+    pp4 = predict(pp_size=4, comm_link="nvlink", **common)
+    assert pp4.pp_comm_prefill_s > pp2.pp_comm_prefill_s
+    assert pp4.pp_comm_decode_s > pp2.pp_comm_decode_s
+
+
+def test_comm_overrides():
+    """Verify custom communication overrides (bandwidth & latency)."""
+    common = dict(
+        n_params_b=7.0, bits=16, p_in=256, p_out=64, batch=1,
+        peak_flops=get_peak_compute("1xA100", 16),
+        mem_bw=get_memory_bandwidth("1xA100"),
+        alpha=0.30, beta=0.70,
+        layers=32, d_model=4096, kv_heads=8,
+        tp_size=2,
+    )
+    
+    # baseline nvlink: bw=450.0 GB/s, latency=1.5e-6 s
+    ref = predict(comm_link="nvlink", **common)
+    
+    # override bandwidth to be 10x lower
+    slow_bw = predict(comm_link="nvlink", comm_link_bw=45.0, **common)
+    assert slow_bw.comm_link_bw == 45.0
+    assert slow_bw.tp_comm_prefill_s > ref.tp_comm_prefill_s
+    
+    # override latency to be 10x higher
+    slow_lat = predict(comm_link="nvlink", comm_link_latency=15e-6, **common)
+    assert slow_lat.comm_link_latency == 15e-6
+    assert slow_lat.tp_comm_prefill_s > ref.tp_comm_prefill_s
+
 
 if __name__ == "__main__":
     test_a100_7b_fp16_decode_is_memory_bound()
@@ -726,4 +870,11 @@ if __name__ == "__main__":
     test_sliding_window_unbounded_by_default()
     test_deepseek_v4_pro_inherits_sliding_window_from_arch()
     test_defaults_preserve_legacy_behavior()
+    test_mla_exact_matches_gqa_approximation()
+    test_batch_dependent_alpha_scaling()
+    test_deepseek_models_auto_load_mla()
+    test_interconnect_inference()
+    test_tp_allreduce_overhead_scaling()
+    test_pp_communication_overhead()
+    test_comm_overrides()
     print("all tests passed")
